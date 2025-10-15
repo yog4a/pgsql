@@ -11,3 +11,8 @@ build/
 # Env and logs
 .env
 .env.local
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
