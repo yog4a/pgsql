@@ -1,4 +1,4 @@
-# @yog4a/pgsql
+# Yog4a | pgsql
 
 A personal encapsulation module for [Pgsql](https://node-postgres.com), providing enhanced functionality.
 
