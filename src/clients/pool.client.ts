@@ -67,9 +67,13 @@ export class PoolClientClass extends Controller {
             const required = ['host', 'database', 'user', 'password', 'port'].join(', ');
             throw new Error(`Need minimum required database configuration: ${required}`);
         }
+
+        if (Number.isNaN(port) || !Number.isInteger(port)) {
+            throw new Error(`Port (${port}) must be an integer!`);
+        }
         
-        if (max !== undefined  && max !== null && max < 3) {
-            throw new Error('Max clients in pool must be at least 3!');
+        if (!max || Number.isNaN(max) || !Number.isInteger(max) || max < 2) {
+            throw new Error(`Max clients (${max}) in pool must be at least 2!`);
         }
 
         // Forces connection rotation, helps avoid stale connections if infra/network resets (default: 0 = disabled)
