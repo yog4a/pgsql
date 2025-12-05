@@ -8,6 +8,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsup",
+    "release": "git push --follow-tags",
     "build:patch": "pnpm version patch && tsup",
     "build:minor": "pnpm version minor && tsup",
     "build:major": "pnpm version major && tsup",

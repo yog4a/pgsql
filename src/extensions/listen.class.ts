@@ -1,5 +1,15 @@
 import type { PoolClient, ClientBase, QueryResult, Notification } from 'pg';
 import { CoreClient, type IClient } from 'src/core/client.core.js';
+import { queryModule } from 'src/modules/query.module.js';
+import { transactionModule } from 'src/modules/transaction.module.js';
+
+/**
+ * Additional options for client behavior and debugging.
+ */
+export interface ClientOptions extends IClient.Options {
+    /** Maximum number of attempts to retry a query */
+    maxAttempts?: number;
+};
 
 /**
  * The events for a channel.
@@ -19,17 +29,25 @@ export interface ChannelEvents {
 export class ListenClient extends CoreClient {
     /** The channels map */
     private channels: Map<string, Omit<ChannelEvents, 'channel'>>;
+    /** The query module */
+    protected readonly queryModule: ReturnType<typeof queryModule>;
+    /** The transaction module */
+    protected readonly transactionModule: ReturnType<typeof transactionModule>;
 
     /**
      * ListenClient class constructor.
      * @param config - The client configuration object.
      * @param options - Additional client options.
      */
-    constructor(config: IClient.Config, options: IClient.Options) {
+    constructor(config: IClient.Config, options: ClientOptions) {
         super(config, options);
 
         // Initialize channels
         this.channels = new Map();
+
+        // Initialize modules
+        this.queryModule = queryModule({ maxAttempts: options.maxAttempts ?? 2 });
+        this.transactionModule = transactionModule({ maxAttempts: options.maxAttempts ?? 2 });
         
         // Hook into client events for auto-reconnect
         this.connectionEvents.onConnect(() => this.onClientConnect());
@@ -37,6 +55,26 @@ export class ListenClient extends CoreClient {
     }
 
     // Public
+
+    public async query(query: string, values?: unknown[]): Promise<QueryResult> {
+        return await this.queryModule.queryWithRetry({ query, values }, {
+            getClient: () => this.getClient(),
+            onError: (err: string) => this.logger.error(err),
+        });
+    }
+
+    public async transaction(queries: { query: string, values?: unknown[] }[]): Promise<QueryResult[]> {
+        return await this.transactionModule.transactionWithRetry(queries, {
+            getClient: () => this.getClient(),
+            onError: (err: string) => this.logger.error(err),
+        });
+    }
+
+    public async shutdown(): Promise<void> {
+        await this.queryModule.shutdown((message) => this.logger.info(message));
+        await this.transactionModule.shutdown((message) => this.logger.info(message));
+        await this.disconnect();
+    }
 
     /**
      * Subscribe to a PostgreSQL NOTIFY channel.
