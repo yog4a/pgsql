@@ -1,14 +1,13 @@
 /**
- * Simple logger utility with a prefix and optional debug mode.
+ * Simple and extensible logger utility.
  *
- * Provides standard log methods (`info`, `warn`, `error`, `debug`)
- * with consistent formatting and an optional debug toggle.
+ * Supports standard logging methods (`info`, `warn`, `error`, `debug`)
+ * with consistent formatting, message prefixing, and error safety.
  */
 export class Logger {
     /**
-     * @constructor
-     * @param {string} prefix - Text to prepend to all log messages
-     * @param {boolean} debugMode - Whether to enable debug mode
+     * Creates a new Logger instance.
+     * @param prefix - Text to prepend to all log messages.
      */
     constructor(
         private readonly prefix: string,

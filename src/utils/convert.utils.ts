@@ -1,3 +1,6 @@
+// Types
+// ===========================================================
+
 export type Hex = `0x${string}`;
 export type Bytea = Buffer | Uint8Array;
 

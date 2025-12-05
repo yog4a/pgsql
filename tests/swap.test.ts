@@ -1,4 +1,4 @@
-import { EvmSwaps, EvmSwap } from '../src/index.js';
+import { EvmSwaps, EvmSwap } from '../src/packages/pg.js';
 
 // Constants
 // ===========================================================

@@ -1,1 +1,0 @@
-export { PoolClientClass as DatabasePool, type IPool } from './clients/pool.client.js';

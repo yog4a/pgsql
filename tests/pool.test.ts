@@ -1,4 +1,4 @@
-import { DatabasePool } from '../src/clients.js';
+import { DatabasePool } from '../src/index.js';
 import 'dotenv/config';
 
 
