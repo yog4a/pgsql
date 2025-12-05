@@ -1,7 +1,7 @@
 {
   "name": "@yog4a/pgsql",
   "description": "Personal encapsulation module for pgsql",
-  "version": "0.7.13",
+  "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
