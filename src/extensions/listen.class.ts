@@ -6,7 +6,7 @@ import { transactionModule } from 'src/modules/transaction.module.js';
 /**
  * Additional options for client behavior and debugging.
  */
-export interface ClientOptions extends IClient.Options {
+export interface ClientListenOptions extends IClient.Options {
     /** Maximum number of attempts to retry a query */
     maxAttempts?: number;
 };
