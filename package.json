@@ -3,7 +3,7 @@
   "description": "Personal encapsulation module for pgsql",
   "version": "0.7.13",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "scripts": {
@@ -26,13 +26,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "pg": "^8.16.3",
-    "pg-connection-string": "^2.9.1",
-    "pg-cursor": "^2.15.3",
-    "pg-native": "^3.5.2",
-    "pg-pool": "^3.10.1",
-    "pg-protocol": "^1.10.3",
-    "pg-query-stream": "^4.10.3"
+    "pg": "^8.16.3"
   },
   "files": [
     "dist"
@@ -44,17 +38,17 @@
       "require": "./dist/index.cjs",
       "default": "./dist/index.mjs"
     },
-    "./clients": {
-      "types": "./dist/clients.d.ts",
-      "import": "./dist/clients.mjs",
-      "require": "./dist/clients.cjs",
-      "default": "./dist/clients.mjs"
-    },
     "./utils": {
       "types": "./dist/utils.d.ts",
       "import": "./dist/utils.mjs",
       "require": "./dist/utils.cjs",
       "default": "./dist/utils.mjs"
+    },
+    "./pg": {
+      "types": "./dist/packages/pg.d.ts",
+      "import": "./dist/packages/pg.mjs",
+      "require": "./dist/packages/pg.cjs",
+      "default": "./dist/packages/pg.mjs"
     }
   }
 }
