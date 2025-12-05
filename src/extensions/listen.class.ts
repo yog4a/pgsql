@@ -39,7 +39,7 @@ export class ListenClient extends CoreClient {
      * @param config - The client configuration object.
      * @param options - Additional client options.
      */
-    constructor(config: IClient.Config, options: ClientOptions) {
+    constructor(config: IClient.Config, options: ClientListenOptions) {
         super(config, options);
 
         // Initialize channels
