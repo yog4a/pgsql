@@ -1,4 +1,4 @@
-import type { PoolClient, ClientBase, QueryResult, Notification } from 'pg';
+import type { QueryResult, Notification } from 'pg';
 import { CoreClient, type IClient } from 'src/core/client.core.js';
 import { queryModule } from 'src/modules/query.module.js';
 import { transactionModule } from 'src/modules/transaction.module.js';
@@ -91,7 +91,9 @@ export class ListenClient extends CoreClient {
         try {
             // Attach notification handler if not already
             if (client.listenerCount('notification') === 0) {
-                client.on('notification', this.onNotification);
+                client.on('notification', 
+                    (notif: Notification) => this.onNotification(notif)
+                );
             }
 
             // Execute LISTEN command
@@ -156,7 +158,9 @@ export class ListenClient extends CoreClient {
 
             // Attach notification handler
             if (client.listenerCount('notification') === 0) {
-                client.on('notification', this.onNotification);
+                client.on('notification', 
+                    (notif: Notification) => this.onNotification(notif)
+                );
             }
 
             // Re-subscribe to all channels
