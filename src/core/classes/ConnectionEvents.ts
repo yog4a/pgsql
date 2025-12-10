@@ -26,6 +26,13 @@ export class ConnectionEvents {
     disconnect(): void {
         this.events.emit('disconnect');
     }
+
+    /**
+     * Emits the reconnect event.
+     */
+    reconnect(): void {
+        this.events.emit('reconnect');
+    }
     
     /**
      * Adds a listener for the connect event.
@@ -45,5 +52,15 @@ export class ConnectionEvents {
             this.events.removeAllListeners('disconnect');
         }
         this.events.on('disconnect', fn);
+    }
+
+    /**
+     * Adds a listener for the reconnect event.
+     */
+    onReconnect(fn: () => void): void {
+        if (this.events.listenerCount('reconnect') > 0) {
+            this.events.removeAllListeners('reconnect');
+        }
+        this.events.on('reconnect', fn);
     }
 }

@@ -172,7 +172,8 @@ export class ListenClient extends CoreClient {
                     if (this.options.debug) {
                         this.logger.info(`Re-subscribed to channel "${channel}"`);
                     }
-                } catch (error) {
+                } 
+                catch (error) {
                     this.logger.error(`Failed to re-subscribe to "${channel}":`, (error as Error).message);
                     events.onError(error as Error);
                 }
@@ -183,10 +184,14 @@ export class ListenClient extends CoreClient {
     }
 
     private onClientDisconnect(): void {
-        for (const [, events] of this.channels) {
+        for (const [channel, events] of this.channels) {
             try {
                 events.onDisconnect();
-            } catch {}
+            }
+            catch (error) {
+                this.logger.error(`Failed to disconnect from channel "${channel}":`, (error as Error).message);
+                events.onError(error as Error);
+            }
         }
     }
 
