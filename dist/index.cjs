@@ -318,6 +318,12 @@ var ConnectionEvents = class {
     this.events.emit("disconnect");
   }
   /**
+   * Emits the reconnect event.
+   */
+  reconnect() {
+    this.events.emit("reconnect");
+  }
+  /**
    * Adds a listener for the connect event.
    */
   onConnect(fn) {
@@ -334,6 +340,15 @@ var ConnectionEvents = class {
       this.events.removeAllListeners("disconnect");
     }
     this.events.on("disconnect", fn);
+  }
+  /**
+   * Adds a listener for the reconnect event.
+   */
+  onReconnect(fn) {
+    if (this.events.listenerCount("reconnect") > 0) {
+      this.events.removeAllListeners("reconnect");
+    }
+    this.events.on("reconnect", fn);
   }
 };
 
@@ -1089,10 +1104,12 @@ var ListenClient = class extends CoreClient {
     }
   }
   onClientDisconnect() {
-    for (const [, events] of this.channels) {
+    for (const [channel, events] of this.channels) {
       try {
         events.onDisconnect();
-      } catch {
+      } catch (error) {
+        this.logger.error(`Failed to disconnect from channel "${channel}":`, error.message);
+        events.onError(error);
       }
     }
   }

@@ -136,6 +136,10 @@ declare class ConnectionEvents {
      */
     disconnect(): void;
     /**
+     * Emits the reconnect event.
+     */
+    reconnect(): void;
+    /**
      * Adds a listener for the connect event.
      */
     onConnect(fn: () => void): void;
@@ -143,6 +147,10 @@ declare class ConnectionEvents {
      * Adds a listener for the disconnect event.
      */
     onDisconnect(fn: () => void): void;
+    /**
+     * Adds a listener for the reconnect event.
+     */
+    onReconnect(fn: () => void): void;
 }
 
 declare namespace IClient {
