@@ -7,17 +7,16 @@
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "prepare": "tsup",
+    "prepack": "tsup",
     "build": "tsup",
-    "release": "git push --follow-tags",
-    "build:patch": "pnpm version patch && tsup",
-    "build:minor": "pnpm version minor && tsup",
-    "build:major": "pnpm version major && tsup",
-    "version:patch": "pnpm version patch",
-    "version:minor": "pnpm version minor",
-    "version:major": "pnpm version major",
-    "update": "pnpm up --latest",
-    "publish:npm": "pnpm publish --registry https://registry.npmjs.org/"
+    "build:patch": "npm version patch && npm run build",
+    "build:minor": "npm version minor && npm run build",
+    "build:major": "npm version major && npm run build",
+    "version:patch": "npm version patch",
+    "version:minor": "npm version minor",
+    "version:major": "npm version major",
+    "update": "npm up --latest",
+    "release": "git push --follow-tags"
   },
   "devDependencies": {
     "@types/node": "^24.7.0",
@@ -51,6 +50,12 @@
       "import": "./dist/packages/pg.mjs",
       "require": "./dist/packages/pg.cjs",
       "default": "./dist/packages/pg.mjs"
+    },
+    "./clients": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.mjs"
     }
   }
 }
