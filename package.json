@@ -32,7 +32,9 @@
     "pg": "^8.18.0"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE.md",
+    "README.md"
   ],
   "exports": {
     ".": {
