@@ -26,7 +26,7 @@ __export(index_exports, {
   CorePool: () => CorePool,
   IClient: () => IClient,
   IPool: () => IPool,
-  ListenClient: () => ListenClient,
+  NotificationClient: () => NotificationClient,
   Pool: () => Pool2
 });
 module.exports = __toCommonJS(index_exports);
@@ -309,20 +309,26 @@ var ConnectionEvents = class {
   /**
    * Emits the connect event.
    */
-  connect() {
-    this.events.emit("connect");
+  connect(message) {
+    this.events.emit("connect", message);
   }
   /**
    * Emits the disconnect event.
    */
-  disconnect() {
-    this.events.emit("disconnect");
+  disconnect(message) {
+    this.events.emit("disconnect", message);
   }
   /**
    * Emits the reconnect event.
    */
-  reconnect() {
-    this.events.emit("reconnect");
+  reconnect(message) {
+    this.events.emit("reconnect", message);
+  }
+  /**
+   * Emits the notification event.
+   */
+  notification(notif) {
+    this.events.emit("notification", notif);
   }
   /**
    * Adds a listener for the connect event.
@@ -351,7 +357,24 @@ var ConnectionEvents = class {
     }
     this.events.on("reconnect", fn);
   }
+  /**
+   * Adds a listener for the notification event.
+   */
+  onNotification(fn) {
+    if (this.events.listenerCount("notification") > 0) {
+      this.events.removeAllListeners("notification");
+    }
+    this.events.on("notification", fn);
+  }
 };
+
+// src/utils/wait.utils.ts
+async function waitWithBackoff(attempt, options) {
+  const jitter = Math.random() * options.maxJitterMs;
+  const backoff = Math.min(1e3 * attempt, options.maxDelayMs);
+  await new Promise((res) => setTimeout(res, backoff + jitter));
+}
+__name(waitWithBackoff, "waitWithBackoff");
 
 // src/core/client.core.ts
 var IClient;
@@ -376,7 +399,7 @@ var CoreClient = class {
     this.logger = new Logger(`[pgsql][client][${database}]`);
     this.connectionController = new ConnectionController(this.logger, options.debug);
     this.connectionEvents = new ConnectionEvents();
-    void this.setup().catch((error) => {
+    this.initialize().catch((error) => {
       setImmediate(() => {
         throw error;
       });
@@ -391,148 +414,153 @@ var CoreClient = class {
   connectionEvents;
   /** Class Logger Instance */
   logger;
-  /** Setup running */
-  isCreating = false;
-  /** True after the first successful connection */
-  hasConnectedOnce = false;
+  /** True when reconnection is in progress */
+  _isReconnecting = false;
+  /** True when client is being destroyed */
+  _isDestroying = false;
   /** True when client is intentionally shutting down */
-  isShuttingDown = false;
-  /** Startup connection error (used to fail fast on first connect) */
-  startupError = null;
+  _isShuttingDown = false;
   /** The PostgreSQL client instance */
-  client = null;
-  // Public
+  _client = null;
+  // ===========================================================
+  // Public methods
+  // ===========================================================
   async getClient() {
-    if (this.startupError) {
-      throw this.startupError;
-    }
     await this.connectionController.connection.enterOrWait();
-    if (this.startupError) {
-      throw this.startupError;
+    if (!this._client) {
+      if (this._isReconnecting) {
+        await this.connectionController.connection.enterOrWait();
+      }
+      if (!this._client) {
+        throw new Error("Client is not initialized or not connected");
+      }
     }
-    if (!this.client) {
-      throw new Error("Client is not initialized or not connected");
-    }
-    return this.client;
+    return this._client;
   }
   async disconnect() {
-    this.isShuttingDown = true;
-    this.connectionController.connection.close(new Error("Client disconnected"));
+    this._isShuttingDown = true;
+    this.connectionController.connection.close(
+      new Error("Client disconnected")
+    );
     await this.destroyClient();
-    this.connectionController.connection.close();
   }
-  // Private
-  async setup() {
-    if (this.isCreating || this.isShuttingDown) {
+  // ===========================================================
+  // Private methods - Initialization
+  // ===========================================================
+  async initialize() {
+    try {
+      await this.createClient();
+      await this.verifyClient();
       if (this.options.debug) {
-        this.logger.info("Client is already being setup");
+        this.logger.info("client initialized");
       }
+      this.connectionController.connection.open();
+      this.connectionEvents.connect();
+    } catch (error) {
+      this.logger.error("failed to initialize client:", error.message);
+      throw error;
+    }
+  }
+  // ===========================================================
+  // Private methods - Reconnection
+  // ===========================================================
+  async reconnect() {
+    if (this._isReconnecting || this._isShuttingDown) {
       return;
     }
-    this.isCreating = true;
+    this._isReconnecting = true;
     this.connectionController.connection.close();
-    try {
-      if (!this.hasConnectedOnce) {
-        try {
-          await this.destroyClient();
-          await this.createClient();
-          await this.verifyClient();
-          if (this.options.debug) {
-            this.logger.info(`successfully setup client`);
-          }
-          this.startupError = null;
-          this.hasConnectedOnce = true;
-          this.connectionController.connection.open();
-          this.connectionEvents.connect();
-          return;
-        } catch (error) {
-          const startupError = error;
-          this.startupError = startupError;
-          this.connectionController.connection.close(startupError);
-          this.logger.error(
-            `failed initial client setup:`,
-            error.message
-          );
-          throw startupError;
+    let attempt = 0;
+    while (!this._isShuttingDown) {
+      attempt++;
+      try {
+        await this.destroyClient();
+        await this.createClient();
+        await this.verifyClient();
+        if (this.options.debug) {
+          this.logger.info("client reconnected");
         }
+        this.connectionController.connection.open();
+        this.connectionEvents.reconnect();
+        this._isReconnecting = false;
+        return;
+      } catch (error) {
+        this.logger.error(
+          `reconnect attempt ${attempt} failed:`,
+          error.message
+        );
       }
-      let attempt = 0;
-      while (!this.isShuttingDown) {
-        attempt++;
-        try {
-          await this.destroyClient();
-          await this.createClient();
-          await this.verifyClient();
-          if (this.options.debug) {
-            this.logger.info(`successfully reconnected client`);
-          }
-          this.connectionController.connection.open();
-          this.connectionEvents.reconnect();
-          return;
-        } catch (error) {
-          this.logger.error(
-            `attempt ${attempt} failed to reconnect client:`,
-            error.message
-          );
-        }
-        const jitter = Math.random() * 500;
-        const backoff = Math.min(attempt, 10) * 1e3;
-        await new Promise((r) => setTimeout(r, backoff + jitter));
-      }
-    } finally {
-      this.isCreating = false;
+      await waitWithBackoff(attempt, { maxJitterMs: 500, maxDelayMs: 1e4 });
     }
+    this._isReconnecting = false;
   }
+  // ===========================================================
+  // Private methods - Client management
+  // ===========================================================
   async createClient() {
-    this.client = new import_pg.Client(this.config);
-    this.client.on("error", (err) => {
-      this.logger.error(`Client error: ${err.message} (${err?.code})`);
-      if (this.isCreating === false && this.isShuttingDown === false) {
-        void this.setup();
+    if (this._client) {
+      throw new Error("Client is already initialized");
+    }
+    this._client = new import_pg.Client(this.config);
+    this._client.on("error", (err) => {
+      const dbErr = err;
+      this.logger.error(
+        `Client error: ${err.message} (${dbErr?.code || "N/A"})`
+      );
+      if (!this._isReconnecting && !this._isShuttingDown) {
+        void this.verifyOrReconnect();
       }
     });
-    this.client.on("end", () => {
-      this.logger.warn("Client connection closed");
-      if (this.isCreating === false && this.isShuttingDown === false) {
-        void this.setup();
+    this._client.on("end", () => {
+      this.logger.warn(
+        "Client connection closed"
+      );
+      if (!this._isReconnecting && !this._isShuttingDown) {
+        void this.reconnect();
       }
     });
-    await this.client.connect();
+    this._client.on("notification", (msg) => {
+      this.connectionEvents.notification(msg);
+    });
+    await this._client.connect();
   }
   async destroyClient() {
-    if (!this.client) {
+    if (!this._client || this._isDestroying) {
       return;
     }
+    this._isDestroying = true;
     try {
-      this.client.removeAllListeners();
+      this._client.removeAllListeners();
+      await this._client.end();
       if (this.options.debug) {
-        this.logger.info(`successfully removed all listeners`);
+        this.logger.info("client destroyed");
       }
     } catch (error) {
-      this.logger.warn(
-        `failed to remove all listeners:`,
-        error.message
-      );
+      this.logger.warn("destroy failed:", error.message);
+    } finally {
+      this._client = null;
+      this._isDestroying = false;
     }
-    try {
-      await this.client.end();
-      if (this.options.debug) {
-        this.logger.info(`successfully closed client`);
-      }
-    } catch (error) {
-      this.logger.warn(
-        `failed to close client:`,
-        error.message
-      );
-    }
-    this.client = null;
-    this.connectionEvents.disconnect();
   }
   async verifyClient() {
-    if (!this.client) {
+    if (!this._client) {
       throw new Error("Client is not initialized");
     }
-    await this.connectionController.testClient(this.client);
+    await this.connectionController.testClient(this._client);
+  }
+  verifyOrReconnect() {
+    if (!this._client) {
+      void this.reconnect();
+      return;
+    }
+    void this.connectionController.testClient(this._client).then(() => {
+      if (this.options.debug) {
+        this.logger.info("client still alive");
+      }
+    }).catch((error) => {
+      this.logger.warn("client dead, reconnecting:", error.message);
+      void this.reconnect();
+    });
   }
 };
 
@@ -557,11 +585,11 @@ var CorePool = class {
       const required = ["host", "database", "user", "password", "port"].join(", ");
       throw new Error(`Need minimum required database configuration: ${required}`);
     }
-    if (max === void 0 || max === null || Number.isNaN(max) || !Number.isInteger(max) || max < 2) {
+    if (!Number.isInteger(max) || max < 2) {
       throw new Error(`Max clients (${max}) in pool must be at least 2!`);
     }
-    if (min === void 0 || min === null || Number.isNaN(min) || !Number.isInteger(min) || min < 0) {
-      throw new Error(`Min clients (${min}) in pool must be at least 0!`);
+    if (!Number.isInteger(min) || min < 1) {
+      throw new Error(`Min clients (${min}) in pool must be at least 1!`);
     }
     if (min > max) {
       throw new Error(`Min clients (${min}) cannot exceed max (${max})!`);
@@ -578,276 +606,375 @@ var CorePool = class {
     this.logger = new Logger(`[pgsql][pool][${database}]`);
     this.connectionController = new ConnectionController(this.logger, options.debug);
     this.connectionEvents = new ConnectionEvents();
-    this.setup();
+    this.initialize().catch((error) => {
+      setImmediate(() => {
+        throw error;
+      });
+    });
   }
   static {
     __name(this, "CorePool");
   }
-  /** Class Logger Instance */
-  logger;
   /** Class Connection Controller */
   connectionController;
   /** Class Connection Events */
   connectionEvents;
-  /** Setup running */
-  setupRunning = false;
+  /** Class Logger Instance */
+  logger;
+  /** True when reconnection is in progress */
+  _isReconnecting = false;
+  /** True when pool is being destroyed */
+  _isDestroying = false;
+  /** True when pool is intentionally shutting down */
+  _isShuttingDown = false;
   /** The PostgreSQL pool instance */
-  pool = null;
-  // Public
+  _pool = null;
+  // ===========================================================
+  // Public methods
+  // ===========================================================
   metrics() {
-    if (!this.pool) {
+    if (!this._pool) {
       return null;
     }
     return {
       /** Total number of clients existing within the pool */
-      total: this.pool.totalCount,
+      total: this._pool.totalCount,
       /** Number of clients which are not checked out but are currently idle in the pool */
-      idle: this.pool.idleCount,
+      idle: this._pool.idleCount,
       /** Number of clients which are checked out and in use */
-      active: this.pool.totalCount - this.pool.idleCount,
+      active: this._pool.totalCount - this._pool.idleCount,
       /** Number of queued requests waiting on a client when all clients are checked out */
-      waiting: this.pool.waitingCount
+      waiting: this._pool.waitingCount
     };
   }
   async getClient() {
-    await this.connectionController.connection.enter();
-    if (!this.pool) {
+    await this.connectionController.connection.enterOrWait();
+    if (!this._pool) {
       throw new Error("Pool is not initialized");
     }
-    const client = await this.pool.connect();
+    const client = await this._pool.connect();
     return client;
   }
   async disconnect() {
-    await this.connectionController.connection.enter();
+    this._isShuttingDown = true;
+    this.connectionController.connection.close(
+      new Error("Pool disconnected")
+    );
     await this.destroyPool();
-    this.connectionController.connection.close();
   }
-  // Private
-  async setup() {
-    if (this.setupRunning) {
-      if (this.options.debug) {
-        this.logger.info("Pool is already being setup");
-      }
-      return;
-    }
-    this.setupRunning = true;
-    this.connectionController.connection.close();
+  // ===========================================================
+  // Private methods - Initialization
+  // ===========================================================
+  async initialize() {
     try {
-      let attempt = 0;
-      while (true) {
-        attempt++;
-        try {
-          await this.createPool();
-          await this.verifyPool();
-          if (this.options.debug) {
-            this.logger.info(`successfully setup pool`);
-          }
-          this.connectionController.connection.open();
-          this.connectionEvents.connect();
-          break;
-        } catch (error) {
-          this.logger.error(
-            `attempt ${attempt} failed to create pool:`,
-            error.message
-          );
-        }
-        const jitter = Math.random() * 500;
-        const backoff = Math.min(attempt, 10) * 1e3;
-        await new Promise((r) => setTimeout(r, backoff + jitter));
+      await this.createPool();
+      await this.verifyPool();
+      if (this.options.debug) {
+        this.logger.info("pool initialized");
       }
-    } finally {
-      this.setupRunning = false;
+      this.connectionController.connection.open();
+      this.connectionEvents.connect();
+    } catch (error) {
+      this.logger.error("failed to initialize pool:", error.message);
+      throw error;
     }
   }
-  async createPool() {
-    if (this.pool) {
+  // ===========================================================
+  // Private methods - Reconnection
+  // ===========================================================
+  async reconnect() {
+    if (this._isReconnecting || this._isShuttingDown) {
       return;
     }
-    this.pool = new import_pg2.Pool(this.config);
-    if (this.pool.listenerCount("error") === 0) {
-      this.pool.on("error", (err, client) => {
-        this.logger.error(`Pool error: ${err.message} (${err?.code})`, err, client);
-      });
-    }
-    if (this.pool.listenerCount("connect") === 0) {
-      this.pool.on("connect", (client) => {
-        if (client.listenerCount("error") === 0) {
-          client.on("error", (err) => {
-            this.logger.error(`Client error: ${err.message} (${err?.code})`, err, client);
-          });
-        }
+    this._isReconnecting = true;
+    this.connectionController.connection.close();
+    let attempt = 0;
+    while (!this._isShuttingDown) {
+      attempt++;
+      try {
+        await this.destroyPool();
+        await this.createPool();
+        await this.verifyPool();
         if (this.options.debug) {
-          this.logger.info("New client connection established");
+          this.logger.info("pool reconnected");
         }
-      });
+        this.connectionController.connection.open();
+        this.connectionEvents.reconnect();
+        this._isReconnecting = false;
+        return;
+      } catch (error) {
+        this.logger.error(
+          `reconnect attempt ${attempt} failed:`,
+          error.message
+        );
+      }
+      await waitWithBackoff(attempt, { maxJitterMs: 500, maxDelayMs: 1e4 });
     }
-    if (this.pool.listenerCount("remove") === 0) {
-      this.pool.on("remove", (client) => {
-        client.removeAllListeners();
-        if (this.options.debug) {
-          this.logger.info("Client closed and removed from pool");
-        }
-      });
+    this._isReconnecting = false;
+  }
+  // ===========================================================
+  // Private methods - Pool management
+  // ===========================================================
+  async createPool() {
+    if (this._pool) {
+      throw new Error("Pool is already initialized");
     }
+    this._pool = new import_pg2.Pool(this.config);
+    this._pool.on("error", (err, client) => {
+      const dbErr = err;
+      this.logger.error(
+        `Pool error: ${err.message} (${dbErr?.code || "N/A"})`,
+        err,
+        client
+      );
+      if (!this._isReconnecting && !this._isShuttingDown) {
+        void this.verifyOrReconnect();
+      }
+    });
+    this._pool.on("connect", (client) => {
+      if (client.listenerCount("error") === 0) {
+        client.on("error", (err) => {
+          const dbErr = err;
+          this.logger.error(
+            `Client error: ${err.message} (${dbErr?.code || "N/A"})`,
+            err,
+            client
+          );
+        });
+      }
+      if (this.options.debug) {
+        this.logger.info("New client connection established");
+      }
+    });
+    this._pool.on("remove", (client) => {
+      client.removeAllListeners();
+      if (this.options.debug) {
+        this.logger.info("Client closed and removed from pool");
+      }
+    });
     if (this.options.debug) {
-      if (this.pool.listenerCount("acquire") === 0) {
-        this.pool.on("acquire", (client) => {
-          this.logger.info("Client acquired from pool");
-        });
-      }
-      if (this.pool.listenerCount("release") === 0) {
-        this.pool.on("release", (err, client) => {
-          this.logger.info("Client released back to pool");
-        });
-      }
+      this._pool.on("acquire", (client) => {
+        this.logger.info("Client acquired from pool");
+      });
+      this._pool.on("release", (err, client) => {
+        this.logger.info("Client released back to pool");
+      });
     }
   }
   async destroyPool() {
-    if (!this.pool) {
+    if (!this._pool || this._isDestroying) {
       return;
     }
+    this._isDestroying = true;
     try {
-      this.pool.removeAllListeners();
+      this._pool.removeAllListeners();
+      await this._pool.end();
       if (this.options.debug) {
-        this.logger.info(`successfully removed all listeners`);
+        this.logger.info("pool destroyed");
       }
     } catch (error) {
-      this.logger.warn(
-        `failed to remove all listeners:`,
-        error.message
-      );
+      this.logger.warn("destroy failed:", error.message);
+    } finally {
+      this._pool = null;
+      this._isDestroying = false;
     }
-    try {
-      await this.pool.end();
-      if (this.options.debug) {
-        this.logger.info(`successfully closed pool`);
-      }
-    } catch (error) {
-      this.logger.warn(
-        `failed to close pool:`,
-        error.message
-      );
-    }
-    this.pool = null;
   }
   async verifyPool() {
-    if (!this.pool) {
+    if (!this._pool) {
       throw new Error("Pool is not initialized");
     }
-    await this.connectionController.testPool(this.pool);
+    await this.connectionController.testPool(this._pool);
+  }
+  verifyOrReconnect() {
+    if (!this._pool) {
+      void this.reconnect();
+      return;
+    }
+    void this.connectionController.testPool(this._pool).then(() => {
+      if (this.options.debug) {
+        this.logger.info("pool still alive");
+      }
+    }).catch((error) => {
+      this.logger.warn("pool dead, reconnecting:", error.message);
+      void this.reconnect();
+    });
   }
 };
 
 // src/utils/error.utils.ts
-var pgConnectionErrors = /* @__PURE__ */ new Set([
+var PG_CONNECTION_ERRORS = /* @__PURE__ */ new Set([
   "08000",
+  // connection_exception
   "08003",
+  // connection_does_not_exist
   "08006",
+  // connection_failure
   "08001",
+  // sqlclient_unable_to_establish_sqlconnection
   "08004",
+  // sqlserver_rejected_establishment_of_sqlconnection
   "08007",
+  // transaction_resolution_unknown
   "08P01"
+  // protocol_violation
 ]);
-var pgTxnRollbackErrors = /* @__PURE__ */ new Set([
+var PG_INVALID_TRANSACTION_STATE = /* @__PURE__ */ new Set([
+  "25000",
+  // invalid_transaction_state
+  "25001",
+  // active_sql_transaction
+  "25P01",
+  // no_active_sql_transaction
+  "25P02"
+  // in_failed_sql_transaction
+]);
+var PG_TRANSACTION_ROLLBACK_ERRORS = /* @__PURE__ */ new Set([
   "40000",
+  // transaction_rollback
   "40001",
+  // serialization_failure
   "40002",
+  // transaction_integrity_constraint_violation
   "40003",
+  // statement_completion_unknown
   "40P01"
+  // deadlock_detected
 ]);
-var pgLockErrors = /* @__PURE__ */ new Set([
+var PG_LOCK_ERRORS = /* @__PURE__ */ new Set([
   "55P03"
+  // lock_not_available
 ]);
-var pgInterventionErrors = /* @__PURE__ */ new Set([
+var PG_OPERATOR_INTERVENTION_ERRORS = /* @__PURE__ */ new Set([
   "57000",
+  // operator_intervention
   "57014",
+  // query_canceled
   "57P01",
+  // admin_shutdown
   "57P02",
+  // crash_shutdown
   "57P03",
+  // cannot_connect_now
   "57P04",
+  // database_dropped
   "57P05"
+  // idle_session_timeout
 ]);
-var pgResourceErrors = /* @__PURE__ */ new Set([
+var PG_RESOURCE_ERRORS = /* @__PURE__ */ new Set([
   "53000",
+  // insufficient_resources
   "53100",
+  // disk_full
   "53200",
+  // out_of_memory
   "53300",
+  // too_many_connections
   "53400"
+  // configuration_limit_exceeded
 ]);
-var retriableNetworkCodes = /* @__PURE__ */ new Set([
+var RETRIABLE_NETWORK_CODES = /* @__PURE__ */ new Set([
   "ECONNRESET",
+  // Connection reset by peer
   "ECONNREFUSED",
+  // Connection refused
   "ECONNABORTED",
+  // Connection aborted
   "ETIMEDOUT",
+  // Connection timed out
   "EPIPE",
+  // Broken pipe
   "EHOSTUNREACH",
+  // Host is unreachable
   "ENETUNREACH",
+  // Network is unreachable
   "EAI_AGAIN"
+  // Temporary DNS failure
+]);
+var ALL_RETRIABLE_CODES = /* @__PURE__ */ new Set([
+  ...PG_CONNECTION_ERRORS,
+  ...PG_INVALID_TRANSACTION_STATE,
+  ...PG_TRANSACTION_ROLLBACK_ERRORS,
+  ...PG_LOCK_ERRORS,
+  ...PG_OPERATOR_INTERVENTION_ERRORS,
+  ...PG_RESOURCE_ERRORS,
+  ...RETRIABLE_NETWORK_CODES
 ]);
 var isRetriableError = /* @__PURE__ */ __name((err) => {
   if (!err || typeof err !== "object") {
     return false;
   }
   const e = err;
-  const code = typeof e.code === "string" ? e.code.toUpperCase() : void 0;
-  if (code) {
-    if (pgConnectionErrors.has(code) || pgTxnRollbackErrors.has(code) || pgLockErrors.has(code) || pgInterventionErrors.has(code) || pgResourceErrors.has(code) || retriableNetworkCodes.has(code)) {
-      return true;
-    }
+  if (typeof e.code !== "string") {
+    return false;
   }
-  return false;
+  return ALL_RETRIABLE_CODES.has(e.code.toUpperCase());
 }, "isRetriableError");
-
-// src/utils/retry.utils.ts
-async function waitWithBackoff(attempt, options) {
-  const backoff = Math.min(1e3 * attempt, options.maxDelay);
-  const jitter = Math.random() * 500;
-  await new Promise((res) => setTimeout(res, backoff + jitter));
-}
-__name(waitWithBackoff, "waitWithBackoff");
 
 // src/modules/query.module.ts
 function queryModule(options) {
   const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 1));
   let activeRequests = 0;
+  let isShuttingDown = false;
   async function queryWithRetry(params, options2) {
+    if (isShuttingDown) {
+      throw new Error("Query module is shutting down");
+    }
     activeRequests++;
     try {
-      let attempt = 0;
-      while (true) {
-        attempt++;
-        const client = await options2.getClient();
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let client = null;
         try {
+          client = await options2.getClient();
           const result = await client.query(params.query, params.values);
           return result;
         } catch (err) {
-          if (attempt >= maxAttempts || !isRetriableError(err)) {
+          lastError = err;
+          const isLastAttempt = attempt >= maxAttempts;
+          const canRetry = isRetriableError(err);
+          if (isLastAttempt || !canRetry) {
             throw err;
           }
+          const dbErr = err;
           options2.onError(
-            `Transient error on attempt ${attempt}/${maxAttempts}: ${err.message} (code: ${err.code})`
+            `Transient error on attempt ${attempt}/${maxAttempts}: ${lastError.message} (code: ${dbErr?.code || "N/A"})`
           );
-          await waitWithBackoff(attempt, { maxDelay: 15e3 });
+          await waitWithBackoff(attempt, { maxDelayMs: 15e3, maxJitterMs: 500 });
         } finally {
-          if ("release" in client && typeof client.release === "function") {
-            client.release();
+          if (client && "release" in client && typeof client.release === "function") {
+            try {
+              client.release();
+            } catch (releaseError) {
+              options2.onError(
+                `Failed to release client: ${releaseError.message}`
+              );
+            }
           }
         }
       }
+      throw lastError || new Error("Query failed after all retry attempts");
     } finally {
       activeRequests--;
     }
   }
   __name(queryWithRetry, "queryWithRetry");
-  async function shutdown(onLog) {
-    let countRunning = 0;
+  async function shutdown(onLog, timeoutMs = 3e4) {
+    isShuttingDown = true;
+    const startTime = Date.now();
+    let lastCount = -1;
     while (activeRequests > 0) {
-      if (activeRequests !== countRunning) {
+      if (activeRequests !== lastCount) {
         onLog(`waiting for ${activeRequests} queries to finish...`);
-        countRunning = activeRequests;
+        lastCount = activeRequests;
+      }
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error(
+          `Shutdown timeout: ${activeRequests} queries still active after ${timeoutMs}ms`
+        );
       }
       await new Promise((res) => setTimeout(res, 1e3));
     }
+    onLog("all queries completed");
   }
   __name(shutdown, "shutdown");
   function getActiveRequests() {
@@ -866,58 +993,86 @@ __name(queryModule, "queryModule");
 function transactionModule(options) {
   const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 1));
   let activeRequests = 0;
+  let isShuttingDown = false;
   async function transactionWithRetry(queries, options2) {
+    if (isShuttingDown) {
+      throw new Error("Transaction module is shutting down");
+    }
     activeRequests++;
     try {
-      let attempt = 0;
-      while (true) {
-        attempt++;
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let client = null;
+        let inTransaction = false;
         try {
           const results = [];
-          const client = await options2.getClient();
-          try {
-            await client.query("BEGIN");
-            for (const { query, values } of queries) {
-              results.push(
-                await client.query(query, values)
+          client = await options2.getClient();
+          await client.query("BEGIN");
+          inTransaction = true;
+          for (const { query, values } of queries) {
+            results.push(
+              await client.query(query, values)
+            );
+          }
+          await client.query("COMMIT");
+          inTransaction = false;
+          return results;
+        } catch (err) {
+          lastError = err;
+          if (inTransaction && client) {
+            try {
+              await client.query("ROLLBACK");
+            } catch (rollbackErr) {
+              options2.onError(
+                `ROLLBACK failed: ${rollbackErr.message}`
               );
             }
-            await client.query("COMMIT");
-            return results;
-          } catch (queryErr) {
-            await client.query("ROLLBACK").catch((rollbackErr) => {
-              options2.onError(`ROLLBACK failed: ${rollbackErr.message}`);
-            });
-            throw queryErr;
-          } finally {
-            if ("release" in client && typeof client.release === "function") {
-              client.release();
-            }
           }
-        } catch (err) {
-          if (attempt >= maxAttempts || !isRetriableError(err)) {
+          const isLastAttempt = attempt >= maxAttempts;
+          const canRetry = isRetriableError(err);
+          if (isLastAttempt || !canRetry) {
             throw err;
           }
+          const dbErr = err;
           options2.onError(
-            `Transient error on attempt ${attempt}/${maxAttempts}: ${err.message} (code: ${err.code})`
+            `Transient error on attempt ${attempt}/${maxAttempts}: ${lastError.message} (code: ${dbErr?.code || "N/A"})`
           );
-          await waitWithBackoff(attempt, { maxDelay: 15e3 });
+          await waitWithBackoff(attempt, { maxDelayMs: 15e3, maxJitterMs: 500 });
+        } finally {
+          if (client && "release" in client && typeof client.release === "function") {
+            try {
+              client.release();
+            } catch (releaseError) {
+              options2.onError(
+                `Failed to release client: ${releaseError.message}`
+              );
+            }
+          }
         }
       }
+      throw lastError || new Error("Transaction failed after all retry attempts");
     } finally {
       activeRequests--;
     }
   }
   __name(transactionWithRetry, "transactionWithRetry");
-  async function shutdown(onLog) {
-    let countRunning = 0;
+  async function shutdown(onLog, timeoutMs = 3e4) {
+    isShuttingDown = true;
+    const startTime = Date.now();
+    let lastCount = -1;
     while (activeRequests > 0) {
-      if (activeRequests !== countRunning) {
-        onLog(`waiting for ${activeRequests} queries to finish...`);
-        countRunning = activeRequests;
+      if (activeRequests !== lastCount) {
+        onLog(`waiting for ${activeRequests} transactions to finish...`);
+        lastCount = activeRequests;
+      }
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error(
+          `Shutdown timeout: ${activeRequests} transactions still active after ${timeoutMs}ms`
+        );
       }
       await new Promise((res) => setTimeout(res, 1e3));
     }
+    onLog("all transactions completed");
   }
   __name(shutdown, "shutdown");
   function getActiveRequests() {
@@ -937,10 +1092,12 @@ var Client2 = class extends CoreClient {
   static {
     __name(this, "Client");
   }
-  /** Class Query Module */
+  /** The query module */
   queryModule;
-  /** Class Transaction Module */
+  /** The transaction module */
   transactionModule;
+  /** True when client is shutting down */
+  isShuttingDown = false;
   /**
    * Client class constructor.
    * @param config - The client configuration object.
@@ -948,26 +1105,75 @@ var Client2 = class extends CoreClient {
    */
   constructor(config, options) {
     super(config, options);
-    this.queryModule = queryModule({ maxAttempts: options.maxAttempts ?? 2 });
-    this.transactionModule = transactionModule({ maxAttempts: options.maxAttempts ?? 2 });
+    const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 2));
+    this.queryModule = queryModule({ maxAttempts });
+    this.transactionModule = transactionModule({ maxAttempts });
   }
-  // Public
+  // ===========================================================
+  // Public methods
+  // ===========================================================
   async query(query, values) {
-    return await this.queryModule.queryWithRetry({ query, values }, {
-      getClient: /* @__PURE__ */ __name(() => this.getClient(), "getClient"),
-      onError: /* @__PURE__ */ __name((err) => this.logger.error(err), "onError")
-    });
+    this.ensureNotShuttingDown();
+    return await this.queryModule.queryWithRetry(
+      { query, values },
+      {
+        getClient: this.getClient.bind(this),
+        onError: this.handleModuleError.bind(this)
+      }
+    );
   }
   async transaction(queries) {
-    return await this.transactionModule.transactionWithRetry(queries, {
-      getClient: /* @__PURE__ */ __name(() => this.getClient(), "getClient"),
-      onError: /* @__PURE__ */ __name((err) => this.logger.error(err), "onError")
-    });
+    this.ensureNotShuttingDown();
+    return await this.transactionModule.transactionWithRetry(
+      queries,
+      {
+        getClient: this.getClient.bind(this),
+        onError: this.handleModuleError.bind(this)
+      }
+    );
   }
   async shutdown() {
-    await this.queryModule.shutdown((message) => this.logger.info(message));
-    await this.transactionModule.shutdown((message) => this.logger.info(message));
-    await this.disconnect();
+    if (this.isShuttingDown) {
+      this.logger.warn("client already shutdown");
+      return;
+    }
+    this.isShuttingDown = true;
+    const shutdownErrors = [];
+    try {
+      await this.queryModule.shutdown((msg) => this.logger.info(msg));
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("query module shutdown failed:", error.message);
+    }
+    try {
+      await this.transactionModule.shutdown((msg) => this.logger.info(msg));
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("transaction module shutdown failed:", error.message);
+    }
+    try {
+      await this.disconnect();
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("client disconnect failed:", error.message);
+    }
+    if (shutdownErrors.length > 0) {
+      throw new Error(
+        `Shutdown completed with ${shutdownErrors.length} error(s)`
+      );
+    }
+    this.logger.info("client shutdown complete");
+  }
+  // ===========================================================
+  // Private methods
+  // ===========================================================
+  ensureNotShuttingDown() {
+    if (this.isShuttingDown) {
+      throw new Error("Client is shutting down");
+    }
+  }
+  handleModuleError(err) {
+    this.logger.error(err);
   }
 };
 
@@ -978,8 +1184,10 @@ var Pool2 = class extends CorePool {
   }
   /** The query module */
   queryModule;
-  /** Class Transaction Module */
+  /** The transaction module */
   transactionModule;
+  /** True when pool is shutting down */
+  isShuttingDown = false;
   /**
    * Pool class constructor.
    * @param config - The pool configuration object.
@@ -987,88 +1195,110 @@ var Pool2 = class extends CorePool {
    */
   constructor(config, options) {
     super(config, options);
-    this.queryModule = queryModule({ maxAttempts: options.maxAttempts ?? 2 });
-    this.transactionModule = transactionModule({ maxAttempts: options.maxAttempts ?? 2 });
+    const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 2));
+    this.queryModule = queryModule({ maxAttempts });
+    this.transactionModule = transactionModule({ maxAttempts });
   }
-  // Public
+  // ===========================================================
+  // Public methods
+  // ===========================================================
   async query(query, values) {
-    return await this.queryModule.queryWithRetry({ query, values }, {
-      getClient: /* @__PURE__ */ __name(() => this.getClient(), "getClient"),
-      onError: /* @__PURE__ */ __name((err) => this.logger.error(err), "onError")
-    });
+    this.ensureNotShuttingDown();
+    return await this.queryModule.queryWithRetry(
+      { query, values },
+      {
+        getClient: this.getClient.bind(this),
+        onError: this.handleModuleError.bind(this)
+      }
+    );
   }
   async transaction(queries) {
-    return await this.transactionModule.transactionWithRetry(queries, {
-      getClient: /* @__PURE__ */ __name(() => this.getClient(), "getClient"),
-      onError: /* @__PURE__ */ __name((err) => this.logger.error(err), "onError")
-    });
+    this.ensureNotShuttingDown();
+    return await this.transactionModule.transactionWithRetry(
+      queries,
+      {
+        getClient: this.getClient.bind(this),
+        onError: this.handleModuleError.bind(this)
+      }
+    );
   }
   async shutdown() {
-    await this.queryModule.shutdown((message) => this.logger.info(message));
-    await this.transactionModule.shutdown((message) => this.logger.info(message));
-    await this.disconnect();
+    if (this.isShuttingDown) {
+      this.logger.warn("pool already shutdown");
+      return;
+    }
+    this.isShuttingDown = true;
+    const shutdownErrors = [];
+    try {
+      await this.queryModule.shutdown((msg) => this.logger.info(msg));
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("query module shutdown failed:", error.message);
+    }
+    try {
+      await this.transactionModule.shutdown((msg) => this.logger.info(msg));
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("transaction module shutdown failed:", error.message);
+    }
+    try {
+      await this.disconnect();
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("pool disconnect failed:", error.message);
+    }
+    if (shutdownErrors.length > 0) {
+      throw new Error(
+        `Shutdown completed with ${shutdownErrors.length} error(s)`
+      );
+    }
+    this.logger.info("pool shutdown complete");
+  }
+  // ===========================================================
+  // Private methods
+  // ===========================================================
+  ensureNotShuttingDown() {
+    if (this.isShuttingDown) {
+      throw new Error("Pool is shutting down");
+    }
+  }
+  handleModuleError(err) {
+    this.logger.error(err);
   }
 };
 
-// src/extensions/listen.class.ts
-var ListenClient = class extends CoreClient {
+// src/extensions/notification.class.ts
+var NotificationClient = class extends CoreClient {
   static {
-    __name(this, "ListenClient");
+    __name(this, "NotificationClient");
   }
   /** The channels map */
   channels;
-  /** The query module */
-  queryModule;
-  /** The transaction module */
-  transactionModule;
+  /** True when client is shutting down */
+  isShuttingDown = false;
   /**
-   * ListenClient class constructor.
+   * NotificationClient class constructor.
    * @param config - The client configuration object.
    * @param options - Additional client options.
    */
   constructor(config, options) {
     super(config, options);
     this.channels = /* @__PURE__ */ new Map();
-    this.queryModule = queryModule({ maxAttempts: options.maxAttempts ?? 2 });
-    this.transactionModule = transactionModule({ maxAttempts: options.maxAttempts ?? 2 });
-    this.connectionEvents.onReconnect(() => this.onClientReconnect());
-    this.connectionEvents.onDisconnect(() => this.onClientDisconnect());
+    this.connectionEvents.onReconnect(() => this.handleReconnect());
+    this.connectionEvents.onDisconnect(() => this.handleDisconnect());
+    this.connectionEvents.onNotification((msg) => this.handleNotification(msg));
   }
-  // Public
-  async query(query, values) {
-    return await this.queryModule.queryWithRetry({ query, values }, {
-      getClient: /* @__PURE__ */ __name(() => this.getClient(), "getClient"),
-      onError: /* @__PURE__ */ __name((err) => this.logger.error(err), "onError")
-    });
-  }
-  async transaction(queries) {
-    return await this.transactionModule.transactionWithRetry(queries, {
-      getClient: /* @__PURE__ */ __name(() => this.getClient(), "getClient"),
-      onError: /* @__PURE__ */ __name((err) => this.logger.error(err), "onError")
-    });
-  }
-  async shutdown() {
-    await this.queryModule.shutdown((message) => this.logger.info(message));
-    await this.transactionModule.shutdown((message) => this.logger.info(message));
-    await this.disconnect();
-  }
-  /**
-   * Subscribe to a PostgreSQL NOTIFY channel.
-   * Will automatically re-subscribe on reconnection.
-   */
+  // ===========================================================
+  // Public methods
+  // ===========================================================
   async listen(channel, events) {
+    this.ensureNotShutdown();
     if (this.channels.has(channel)) {
       throw new Error(`Already listening to channel: ${channel}`);
     }
     this.channels.set(channel, events);
-    const client = await this.getClient();
     try {
-      if (client.listenerCount("notification") === 0) {
-        client.on(
-          "notification",
-          (notif) => this.onNotification(notif)
-        );
-      }
+      const client = await this.getClient();
       await client.query(`LISTEN "${channel}"`);
       events.onConnect();
       if (this.options.debug) {
@@ -1079,9 +1309,6 @@ var ListenClient = class extends CoreClient {
       throw error;
     }
   }
-  /**
-   * Unsubscribe from a PostgreSQL NOTIFY channel.
-   */
   async unlisten(channel) {
     const events = this.channels.get(channel);
     if (!events) {
@@ -1099,68 +1326,99 @@ var ListenClient = class extends CoreClient {
       this.logger.warn(`Failed to UNLISTEN "${channel}":`, error.message);
     }
   }
-  /**
-   * Disconnect and clean up all listeners.
-   */
+  async shutdown() {
+    if (this.isShuttingDown) {
+      this.logger.warn("client already shutdown");
+      return;
+    }
+    this.isShuttingDown = true;
+    try {
+      await this.disconnect();
+    } catch (error) {
+      this.logger.error("client disconnect failed:", error.message);
+      throw error;
+    }
+    this.logger.info("client shutdown complete");
+  }
   async disconnect() {
-    for (const [, events] of this.channels) {
-      events.onDisconnect();
+    for (const [channel, events] of this.channels) {
+      try {
+        events.onDisconnect();
+      } catch (error) {
+        this.logger.error(
+          `error in onDisconnect for channel "${channel}":`,
+          error.message
+        );
+      }
     }
     this.channels.clear();
     await super.disconnect();
   }
-  // Private - Client event handlers
-  async onClientReconnect() {
+  getActiveChannels() {
+    return Array.from(this.channels.keys());
+  }
+  getChannelCount() {
+    return this.channels.size;
+  }
+  // ===========================================================
+  // Private methods - Event handlers
+  // ===========================================================
+  async handleReconnect() {
     if (this.channels.size === 0) return;
     try {
       const client = await this.getClient();
-      if (client.listenerCount("notification") === 0) {
-        client.on(
-          "notification",
-          (notif) => this.onNotification(notif)
-        );
-      }
       for (const [channel, events] of this.channels) {
         try {
           await client.query(`LISTEN "${channel}"`);
           events.onConnect();
           if (this.options.debug) {
-            this.logger.info(`Re-subscribed to channel "${channel}"`);
+            this.logger.info(`re-subscribed to channel "${channel}"`);
           }
         } catch (error) {
-          this.logger.error(`Failed to re-subscribe to "${channel}":`, error.message);
+          this.logger.error(
+            `failed to re-subscribe to "${channel}":`,
+            error.message
+          );
           events.onError(error);
         }
       }
     } catch (error) {
-      this.logger.error(`Failed to re-subscribe channels:`, error.message);
+      this.logger.error("failed to re-subscribe channels:", error.message);
     }
   }
-  onClientDisconnect() {
+  handleDisconnect() {
     for (const [channel, events] of this.channels) {
       try {
         events.onDisconnect();
       } catch (error) {
-        this.logger.error(`Failed to disconnect from channel "${channel}":`, error.message);
-        events.onError(error);
+        this.logger.error(
+          `error in onDisconnect for channel "${channel}":`,
+          error.message
+        );
       }
     }
   }
-  // Private - Notification handler
-  onNotification(notif) {
+  handleNotification(notif) {
     if (!notif.payload) return;
     const events = this.channels.get(notif.channel);
-    if (events) {
+    if (!events) {
+      return;
+    }
+    try {
+      let data;
       try {
-        try {
-          const data = JSON.parse(notif.payload);
-          events.onData(data);
-        } catch {
-          events.onData([notif.payload]);
-        }
-      } catch (error) {
-        events.onError(error);
+        data = JSON.parse(notif.payload);
+      } catch {
+        data = notif.payload;
       }
+      events.onData(data);
+    } catch (error) {
+      events.onError(error);
+    }
+  }
+  ensureNotShutdown() {
+    if (this.isShuttingDown) {
+      throw new Error("Client is shutting down");
     }
   }
 };
@@ -1171,6 +1429,6 @@ var ListenClient = class extends CoreClient {
   CorePool,
   IClient,
   IPool,
-  ListenClient,
+  NotificationClient,
   Pool
 });

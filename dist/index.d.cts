@@ -1,4 +1,4 @@
-import { Client as Client$1, Pool as Pool$1, ClientConfig, PoolConfig, PoolClient, ClientBase, QueryResult } from 'pg';
+import { Client as Client$1, Pool as Pool$1, Notification, ClientConfig, PoolConfig, PoolClient, ClientBase, QueryResult } from 'pg';
 
 /**
  * Gate/controller for async readiness.
@@ -132,27 +132,35 @@ declare class ConnectionEvents {
     /**
      * Emits the connect event.
      */
-    connect(): void;
+    connect(message?: string): void;
     /**
      * Emits the disconnect event.
      */
-    disconnect(): void;
+    disconnect(message?: string | Error): void;
     /**
      * Emits the reconnect event.
      */
-    reconnect(): void;
+    reconnect(message?: string | Error): void;
+    /**
+     * Emits the notification event.
+     */
+    notification(notif: Notification): void;
     /**
      * Adds a listener for the connect event.
      */
-    onConnect(fn: () => void): void;
+    onConnect(fn: (message?: string) => void): void;
     /**
      * Adds a listener for the disconnect event.
      */
-    onDisconnect(fn: () => void): void;
+    onDisconnect(fn: (message?: string | Error) => void): void;
     /**
      * Adds a listener for the reconnect event.
      */
-    onReconnect(fn: () => void): void;
+    onReconnect(fn: (message?: string | Error) => void): void;
+    /**
+     * Adds a listener for the notification event.
+     */
+    onNotification(fn: (notif: Notification) => void): void;
 }
 
 declare namespace IClient {
@@ -188,16 +196,14 @@ declare class CoreClient {
     protected readonly connectionEvents: ConnectionEvents;
     /** Class Logger Instance */
     protected readonly logger: Logger;
-    /** Setup running */
-    private isCreating;
-    /** True after the first successful connection */
-    private hasConnectedOnce;
+    /** True when reconnection is in progress */
+    private _isReconnecting;
+    /** True when client is being destroyed */
+    private _isDestroying;
     /** True when client is intentionally shutting down */
-    private isShuttingDown;
-    /** Startup connection error (used to fail fast on first connect) */
-    private startupError;
+    private _isShuttingDown;
     /** The PostgreSQL client instance */
-    private client;
+    private _client;
     /**
      * Client class constructor.
      * @param config - PostgreSQL client configuration.
@@ -206,16 +212,17 @@ declare class CoreClient {
     constructor(config: IClient.Config, options: IClient.Options);
     getClient(): Promise<Client$1>;
     disconnect(): Promise<void>;
-    private setup;
+    private initialize;
+    private reconnect;
     private createClient;
     private destroyClient;
     private verifyClient;
+    private verifyOrReconnect;
 }
 
 declare namespace IPool {
     /**
      * Configuration options required for creating a PostgreSQL connection pool.
-     * All fields are required and non-nullable.
      */
     interface Config extends PoolConfig {
         /** Database host address */
@@ -244,16 +251,20 @@ declare namespace IPool {
 declare class CorePool {
     protected readonly config: IPool.Config;
     protected readonly options: IPool.Options;
-    /** Class Logger Instance */
-    protected readonly logger: Logger;
     /** Class Connection Controller */
     protected readonly connectionController: ConnectionController;
     /** Class Connection Events */
     protected readonly connectionEvents: ConnectionEvents;
-    /** Setup running */
-    private setupRunning;
+    /** Class Logger Instance */
+    protected readonly logger: Logger;
+    /** True when reconnection is in progress */
+    private _isReconnecting;
+    /** True when pool is being destroyed */
+    private _isDestroying;
+    /** True when pool is intentionally shutting down */
+    private _isShuttingDown;
     /** The PostgreSQL pool instance */
-    private pool;
+    private _pool;
     /**
      * Pool class constructor.
      * @param config - PostgreSQL pool configuration.
@@ -272,10 +283,12 @@ declare class CorePool {
     } | null;
     getClient(): Promise<PoolClient>;
     disconnect(): Promise<void>;
-    private setup;
+    private initialize;
+    private reconnect;
     private createPool;
     private destroyPool;
     private verifyPool;
+    private verifyOrReconnect;
 }
 
 /**
@@ -296,7 +309,7 @@ declare function queryModule(options: {
         query: string;
         values?: unknown[];
     }, options: QueryOptions) => Promise<QueryResult>;
-    shutdown: (onLog: (message: string) => void) => Promise<void>;
+    shutdown: (onLog: (message: string) => void, timeoutMs?: number) => Promise<void>;
     getActiveRequests: () => number;
 };
 
@@ -319,7 +332,7 @@ declare function transactionModule(options: {
     maxAttempts: number;
 }): {
     transactionWithRetry: (queries: TransactionQuery[], options: TransactionOptions) => Promise<QueryResult[]>;
-    shutdown: (onLog: (message: string) => void) => Promise<void>;
+    shutdown: (onLog: (message: string) => void, timeoutMs?: number) => Promise<void>;
     getActiveRequests: () => number;
 };
 
@@ -331,13 +344,16 @@ interface ClientOptions extends IClient.Options {
     maxAttempts?: number;
 }
 /**
- * PostgreSQL client class.
+ * This class creates a client handler for the database.
+ * It will handle the retry logic for the queries and the shutdown logic.
  */
 declare class Client extends CoreClient {
-    /** Class Query Module */
+    /** The query module */
     protected readonly queryModule: ReturnType<typeof queryModule>;
-    /** Class Transaction Module */
+    /** The transaction module */
     protected readonly transactionModule: ReturnType<typeof transactionModule>;
+    /** True when client is shutting down */
+    private isShuttingDown;
     /**
      * Client class constructor.
      * @param config - The client configuration object.
@@ -350,6 +366,8 @@ declare class Client extends CoreClient {
         values?: unknown[];
     }[]): Promise<QueryResult[]>;
     shutdown(): Promise<void>;
+    private ensureNotShuttingDown;
+    private handleModuleError;
 }
 
 /**
@@ -359,11 +377,17 @@ interface PoolOptions extends IPool.Options {
     /** Maximum number of attempts to retry a query */
     maxAttempts?: number;
 }
+/**
+ * This class creates a pool handler for the database.
+ * It will handle the retry logic for the queries and the shutdown logic.
+ */
 declare class Pool extends CorePool {
     /** The query module */
     protected readonly queryModule: ReturnType<typeof queryModule>;
-    /** Class Transaction Module */
+    /** The transaction module */
     protected readonly transactionModule: ReturnType<typeof transactionModule>;
+    /** True when pool is shutting down */
+    private isShuttingDown;
     /**
      * Pool class constructor.
      * @param config - The pool configuration object.
@@ -376,14 +400,14 @@ declare class Pool extends CorePool {
         values?: unknown[];
     }[]): Promise<QueryResult[]>;
     shutdown(): Promise<void>;
+    private ensureNotShuttingDown;
+    private handleModuleError;
 }
 
 /**
  * Additional options for client behavior and debugging.
  */
 interface ClientListenOptions extends IClient.Options {
-    /** Maximum number of attempts to retry a query */
-    maxAttempts?: number;
 }
 /**
  * The events for a channel.
@@ -392,48 +416,34 @@ interface ChannelEvents {
     channel: string;
     onConnect: () => void;
     onDisconnect: () => void;
-    onData: (messages: string[]) => void;
+    onData: (data: unknown) => void;
     onError: (error: Error) => void;
 }
 /**
- * This module creates a listen handler for the database pool.
- * Automatically recreates listeners on connection errors.
+ * This class creates a notification handler for the database.
+ * It will automatically recreate listeners on connection errors.
  */
-declare class ListenClient extends CoreClient {
+declare class NotificationClient extends CoreClient {
     /** The channels map */
-    private channels;
-    /** The query module */
-    protected readonly queryModule: ReturnType<typeof queryModule>;
-    /** The transaction module */
-    protected readonly transactionModule: ReturnType<typeof transactionModule>;
+    private readonly channels;
+    /** True when client is shutting down */
+    private isShuttingDown;
     /**
-     * ListenClient class constructor.
+     * NotificationClient class constructor.
      * @param config - The client configuration object.
      * @param options - Additional client options.
      */
     constructor(config: IClient.Config, options: ClientListenOptions);
-    query(query: string, values?: unknown[]): Promise<QueryResult>;
-    transaction(queries: {
-        query: string;
-        values?: unknown[];
-    }[]): Promise<QueryResult[]>;
-    shutdown(): Promise<void>;
-    /**
-     * Subscribe to a PostgreSQL NOTIFY channel.
-     * Will automatically re-subscribe on reconnection.
-     */
     listen(channel: string, events: Omit<ChannelEvents, 'channel'>): Promise<void>;
-    /**
-     * Unsubscribe from a PostgreSQL NOTIFY channel.
-     */
     unlisten(channel: string): Promise<void>;
-    /**
-     * Disconnect and clean up all listeners.
-     */
+    shutdown(): Promise<void>;
     disconnect(): Promise<void>;
-    private onClientReconnect;
-    private onClientDisconnect;
-    private onNotification;
+    getActiveChannels(): string[];
+    getChannelCount(): number;
+    private handleReconnect;
+    private handleDisconnect;
+    private handleNotification;
+    private ensureNotShutdown;
 }
 
-export { type ChannelEvents, Client, type ClientListenOptions, type ClientOptions, CoreClient, CorePool, IClient, IPool, ListenClient, Pool, type PoolOptions };
+export { type ChannelEvents, Client, type ClientListenOptions, type ClientOptions, CoreClient, CorePool, IClient, IPool, NotificationClient, Pool, type PoolOptions };
