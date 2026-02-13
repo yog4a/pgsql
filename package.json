@@ -15,19 +15,21 @@
     "version:patch": "npm version patch",
     "version:minor": "npm version minor",
     "version:major": "npm version major",
-    "update": "npm up --latest",
+    "update": "npx npm-check-updates -u && npm install",
+    "update:check": "npx npm-check-updates -u",
+    "update:install": "npm install",
     "release": "git push --follow-tags"
   },
   "devDependencies": {
-    "@types/node": "^24.7.0",
-    "@types/pg": "^8.15.5",
-    "dotenv": "^16.6.1",
-    "tsup": "^8.5.0",
-    "tsx": "^4.20.6",
+    "@types/node": "^25.2.3",
+    "@types/pg": "^8.16.0",
+    "dotenv": "^17.3.1",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "pg": "^8.16.3"
+    "pg": "^8.18.0"
   },
   "files": [
     "dist"
