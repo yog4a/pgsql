@@ -123,20 +123,8 @@ export class NotificationClient extends CoreClient {
     }
 
     public override async disconnect(): Promise<void> {
-        // Notify all channels of disconnect
-        for (const [channel, events] of this.channels) {
-            try {
-                events.onDisconnect();
-            } catch (error) {
-                this.logger.error(
-                    `error in onDisconnect for channel "${channel}":`,
-                    (error as Error).message
-                );
-            }
-        }
-
-        this.channels.clear();
         await super.disconnect();
+        this.channels.clear();
     }
 
     public getActiveChannels(): string[] {

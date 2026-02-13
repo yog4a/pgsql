@@ -1,14 +1,14 @@
 /** BYTEA: binary data */
-type Bytea = Buffer | Uint8Array;
+type PgBytea = Buffer | Uint8Array;
 /** HEX: hexadecimal string representation */
-type Hex = `0x${string}`;
+type PgHex = `0x${string}` | `\\x${string}`;
 
-declare const byteaToHex: (bytea: Bytea) => Hex;
-declare const hexToBytea: (hex: Hex) => Bytea;
-declare const stringToBytea: (str: string) => Bytea;
-declare const byteaToString: (bytea: Bytea) => string;
-declare const base64ToBytea: (base64: string) => Bytea;
-declare const byteaToBase64: (bytea: Bytea) => string;
+declare const byteaToHex: (bytea: PgBytea) => PgHex;
+declare const hexToBytea: (hex: PgHex | string) => PgBytea;
+declare const stringToBytea: (str: string) => PgBytea;
+declare const byteaToString: (bytea: PgBytea) => string;
+declare const base64ToBytea: (base64: string) => PgBytea;
+declare const byteaToBase64: (bytea: PgBytea) => string;
 declare const stringToBigInt: (value: string) => bigint;
 declare const bigIntToString: (value: bigint) => string;
 declare const stringToDecimal: (value: string) => number;

@@ -87,7 +87,12 @@ var byteaToHex = /* @__PURE__ */ __name((bytea) => {
   return `0x${hex}`;
 }, "byteaToHex");
 var hexToBytea = /* @__PURE__ */ __name((hex) => {
-  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  let clean = hex;
+  if (/^0x/i.test(clean)) {
+    clean = clean.slice(2);
+  } else if (/^\\x/i.test(clean)) {
+    clean = clean.slice(2);
+  }
   return Buffer.from(clean, "hex");
 }, "hexToBytea");
 var stringToBytea = /* @__PURE__ */ __name((str) => {

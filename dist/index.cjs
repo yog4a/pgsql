@@ -371,7 +371,8 @@ var ConnectionEvents = class {
 // src/utils/wait.utils.ts
 async function waitWithBackoff(attempt, options) {
   const jitter = Math.random() * options.maxJitterMs;
-  const backoff = Math.min(1e3 * attempt, options.maxDelayMs);
+  const exp = Math.max(0, attempt - 1);
+  const backoff = Math.min(1e3 * 2 ** exp, options.maxDelayMs);
   await new Promise((res) => setTimeout(res, backoff + jitter));
 }
 __name(waitWithBackoff, "waitWithBackoff");
@@ -426,7 +427,13 @@ var CoreClient = class {
   // Public methods
   // ===========================================================
   async getClient() {
+    if (this._isShuttingDown) {
+      throw new Error("Client is shutting down");
+    }
     await this.connectionController.connection.enterOrWait();
+    if (this._isShuttingDown) {
+      throw new Error("Client is shutting down");
+    }
     if (!this._client) {
       if (this._isReconnecting) {
         await this.connectionController.connection.enterOrWait();
@@ -439,8 +446,10 @@ var CoreClient = class {
   }
   async disconnect() {
     this._isShuttingDown = true;
+    const reason = new Error("Client disconnected");
+    this.connectionEvents.disconnect(reason);
     this.connectionController.connection.close(
-      new Error("Client disconnected")
+      reason
     );
     await this.destroyClient();
   }
@@ -470,6 +479,7 @@ var CoreClient = class {
     }
     this._isReconnecting = true;
     this.connectionController.connection.close();
+    this.connectionEvents.disconnect("Client connection lost, reconnecting");
     let attempt = 0;
     while (!this._isShuttingDown) {
       attempt++;
@@ -588,8 +598,8 @@ var CorePool = class {
     if (!Number.isInteger(max) || max < 2) {
       throw new Error(`Max clients (${max}) in pool must be at least 2!`);
     }
-    if (!Number.isInteger(min) || min < 1) {
-      throw new Error(`Min clients (${min}) in pool must be at least 1!`);
+    if (!Number.isInteger(min) || min < 0) {
+      throw new Error(`Min clients (${min}) in pool must be at least 0!`);
     }
     if (min > max) {
       throw new Error(`Min clients (${min}) cannot exceed max (${max})!`);
@@ -648,7 +658,13 @@ var CorePool = class {
     };
   }
   async getClient() {
+    if (this._isShuttingDown) {
+      throw new Error("Pool is shutting down");
+    }
     await this.connectionController.connection.enterOrWait();
+    if (this._isShuttingDown) {
+      throw new Error("Pool is shutting down");
+    }
     if (!this._pool) {
       throw new Error("Pool is not initialized");
     }
@@ -657,8 +673,10 @@ var CorePool = class {
   }
   async disconnect() {
     this._isShuttingDown = true;
+    const reason = new Error("Pool disconnected");
+    this.connectionEvents.disconnect(reason);
     this.connectionController.connection.close(
-      new Error("Pool disconnected")
+      reason
     );
     await this.destroyPool();
   }
@@ -688,6 +706,7 @@ var CorePool = class {
     }
     this._isReconnecting = true;
     this.connectionController.connection.close();
+    this.connectionEvents.disconnect("Pool connection lost, reconnecting");
     let attempt = 0;
     while (!this._isShuttingDown) {
       attempt++;
@@ -1341,18 +1360,8 @@ var NotificationClient = class extends CoreClient {
     this.logger.info("client shutdown complete");
   }
   async disconnect() {
-    for (const [channel, events] of this.channels) {
-      try {
-        events.onDisconnect();
-      } catch (error) {
-        this.logger.error(
-          `error in onDisconnect for channel "${channel}":`,
-          error.message
-        );
-      }
-    }
-    this.channels.clear();
     await super.disconnect();
+    this.channels.clear();
   }
   getActiveChannels() {
     return Array.from(this.channels.keys());

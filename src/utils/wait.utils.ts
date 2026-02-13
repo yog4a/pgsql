@@ -16,8 +16,9 @@ export async function waitWithBackoff(
 ): Promise<void> {
     // Jitter is a random value between 0 and maxJitterMs, to avoid synchronized retries.
     const jitter = Math.random() * options.maxJitterMs;
-    // Backoff increases with each attempt, up to maxDelayMs.
-    const backoff = Math.min(1_000 * attempt, options.maxDelayMs);
+    // Backoff grows exponentially (1s, 2s, 4s, ...) up to maxDelayMs.
+    const exp = Math.max(0, attempt - 1);
+    const backoff = Math.min(1_000 * (2 ** exp), options.maxDelayMs);
     // Wait for the combined backoff plus jitter period before resolving.
     await new Promise(res => setTimeout(res, backoff + jitter));
 }

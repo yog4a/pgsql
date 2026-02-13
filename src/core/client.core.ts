@@ -87,7 +87,15 @@ export class CoreClient {
     // ===========================================================
 
     public async getClient(): Promise<Client> {
+        if (this._isShuttingDown) {
+            throw new Error('Client is shutting down');
+        }
+
         await this.connectionController.connection.enterOrWait();
+
+        if (this._isShuttingDown) {
+            throw new Error('Client is shutting down');
+        }
     
         if (!this._client) {
             // Retry si reconnect en cours
@@ -106,9 +114,14 @@ export class CoreClient {
     public async disconnect(): Promise<void> {
         this._isShuttingDown = true;
 
+        const reason = new Error('Client disconnected');
+
+        // Emit lifecycle event for explicit shutdown.
+        this.connectionEvents.disconnect(reason);
+
         // Reject pending waiters immediately
         this.connectionController.connection.close(
-            new Error('Client disconnected')
+            reason
         );
 
         // Destroy the client
@@ -148,6 +161,7 @@ export class CoreClient {
 
         this._isReconnecting = true;
         this.connectionController.connection.close();
+        this.connectionEvents.disconnect('Client connection lost, reconnecting');
 
         let attempt = 0;
 

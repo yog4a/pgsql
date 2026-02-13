@@ -75,8 +75,8 @@ export class CorePool {
             throw new Error(`Max clients (${max}) in pool must be at least 2!`);
         }
 
-        if (!Number.isInteger(min) || min < 1) {
-            throw new Error(`Min clients (${min}) in pool must be at least 1!`);
+        if (!Number.isInteger(min) || min < 0) {
+            throw new Error(`Min clients (${min}) in pool must be at least 0!`);
         }
 
         if (min > max) {
@@ -137,7 +137,15 @@ export class CorePool {
     }
 
     public async getClient(): Promise<PoolClient> {
+        if (this._isShuttingDown) {
+            throw new Error('Pool is shutting down');
+        }
+
         await this.connectionController.connection.enterOrWait();
+
+        if (this._isShuttingDown) {
+            throw new Error('Pool is shutting down');
+        }
 
         if (!this._pool) {
             throw new Error('Pool is not initialized');
@@ -151,9 +159,14 @@ export class CorePool {
     public async disconnect(): Promise<void> {
         this._isShuttingDown = true;
 
+        const reason = new Error('Pool disconnected');
+
+        // Emit lifecycle event for explicit shutdown.
+        this.connectionEvents.disconnect(reason);
+
         // Reject pending waiters
         this.connectionController.connection.close(
-            new Error('Pool disconnected')
+            reason
         );
 
         // Destroy the pool
@@ -193,6 +206,7 @@ export class CorePool {
 
         this._isReconnecting = true;
         this.connectionController.connection.close();
+        this.connectionEvents.disconnect('Pool connection lost, reconnecting');
 
         let attempt = 0;
 

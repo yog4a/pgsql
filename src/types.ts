@@ -1,333 +1,384 @@
 // ===========================================================
+// PostgreSQL Types for node-postgres (pg) — pragmatic TS aliases
+// Notes:
+// - Avoid naming collisions with TS/JS globals (Boolean, JSON, Record, Array, BigInt, etc.)
+// - node-postgres defaults: int8/numeric => string; timestamps => string (unless custom parsers)
+// ===========================================================
+
+// ===========================================================
 // Numeric Types
 // ===========================================================
 
 /** SMALLINT: -32768 to 32767 */
-export type SmallInt = number;
+export type PgSmallInt = number;
 
 /** INTEGER: -2147483648 to 2147483647 */
-export type Integer = number;
+export type PgInteger = number;
 
-/** BIGINT: -9223372036854775808 to 9223372036854775807 */
-export type BigInt = bigint | string;
+/** BIGINT (int8): -9223372036854775808 to 9223372036854775807
+ * pg default: string (unless you override parser)
+ */
+export type PgBigInt = string | bigint;
 
-/** DECIMAL/NUMERIC: arbitrary precision */
-export type Decimal = string | number;
-export type Numeric = Decimal;
+/** DECIMAL/NUMERIC: arbitrary precision
+ * pg default: string (unless you override parser)
+ */
+export type PgDecimal = string | number;
+export type PgNumeric = PgDecimal;
 
 /** REAL: 6 decimal digits precision */
-export type Real = number;
+export type PgReal = number;
 
 /** DOUBLE PRECISION: 15 decimal digits precision */
-export type DoublePrecision = number;
+export type PgDoublePrecision = number;
 
-/** SMALLSERIAL: auto-incrementing 1 to 32767 */
-export type SmallSerial = number;
+/** FLOAT (alias of double precision in PostgreSQL) */
+export type PgFloat = number;
 
-/** SERIAL: auto-incrementing 1 to 2147483647 */
-export type Serial = number;
+/** SMALLSERIAL: auto-incrementing */
+export type PgSmallSerial = number;
 
-/** BIGSERIAL: auto-incrementing 1 to 9223372036854775807 */
-export type BigSerial = bigint | string;
+/** SERIAL: auto-incrementing */
+export type PgSerial = number;
 
-/** MONEY: currency amount */
-export type Money = string;
+/** BIGSERIAL: auto-incrementing
+ * pg default: string (unless you override parser)
+ */
+export type PgBigSerial = string | bigint;
+
+/** MONEY: currency amount (locale formatted) */
+export type PgMoney = string;
 
 // ===========================================================
 // Character Types
 // ===========================================================
 
 /** VARCHAR(n): variable-length with limit */
-export type VarChar<N extends number = number> = string;
+export type PgVarChar<N extends number = number> = string;
 
 /** CHAR(n): fixed-length, blank padded */
-export type Char<N extends number = number> = string;
+export type PgChar<N extends number = number> = string;
 
 /** TEXT: variable unlimited length */
-export type Text = string;
+export type PgText = string;
+
+/** NAME: internal name type */
+export type PgName = string;
+
+/** CITEXT: case-insensitive text (extension) */
+export type PgCitext = string;
+
+/** XML: XML data */
+export type PgXml = string;
 
 // ===========================================================
 // Binary Types
 // ===========================================================
 
 /** BYTEA: binary data */
-export type Bytea = Buffer | Uint8Array;
+export type PgBytea = Buffer | Uint8Array;
 
 /** HEX: hexadecimal string representation */
-export type Hex = `0x${string}`;
+export type PgHex = `0x${string}` | `\\x${string}`;
 
 // ===========================================================
 // Date/Time Types
 // ===========================================================
 
-/** DATE: calendar date (year, month, day) */
-export type DateType = Date | string;
+/** DATE: calendar date (year, month, day)
+ * pg default: string (often), can be Date if parser overridden
+ */
+export type PgDate = string | Date;
 
-/** TIME: time of day (no time zone) */
-export type Time = string | Date;
+/** TIME: time of day (no time zone) - pg default: string */
+export type PgTime = string;
 
-/** TIME WITH TIME ZONE */
-export type TimeWithTimeZone = string | Date;
+/** TIME WITH TIME ZONE (TIMETZ) - pg default: string */
+export type PgTimeTz = string;
+export type PgTimeWithTimeZone = PgTimeTz;
 
-/** TIMESTAMP: date and time (no time zone) */
-export type Timestamp = Date | string;
+/** TIMESTAMP: date and time (no time zone)
+ * pg default: string, can be Date if parser overridden
+ */
+export type PgTimestamp = string | Date;
 
-/** TIMESTAMP WITH TIME ZONE (TIMESTAMPTZ) */
-export type TimestampWithTimeZone = Date | string;
-export type Timestamptz = TimestampWithTimeZone;
+/** TIMESTAMP WITH TIME ZONE (TIMESTAMPTZ)
+ * pg default: string, can be Date if parser overridden
+ */
+export type PgTimestamptz = string | Date;
+export type PgTimestampWithTimeZone = PgTimestamptz;
 
-/** INTERVAL: time span */
-export type Interval = string | {
-    years?: number;
-    months?: number;
-    days?: number;
-    hours?: number;
-    minutes?: number;
-    seconds?: number;
-};
+/** INTERVAL: time span
+ * pg default: string unless you install/enable interval parsers
+ */
+export type PgInterval =
+  | string
+  | {
+      years?: number;
+      months?: number;
+      days?: number;
+      hours?: number;
+      minutes?: number;
+      seconds?: number;
+    };
 
 // ===========================================================
 // Boolean Type
 // ===========================================================
 
 /** BOOLEAN: true/false */
-export type Boolean = boolean;
+export type PgBoolean = boolean;
 
 // ===========================================================
 // Enumerated Types
 // ===========================================================
 
 /** ENUM: user-defined enumerated type */
-export type Enum<T extends string = string> = T;
+export type PgEnum<T extends string = string> = T;
 
 // ===========================================================
 // Geometric Types
 // ===========================================================
 
 /** POINT: (x,y) */
-export type Point = string | { x: number; y: number };
+export type PgPoint = string | { x: number; y: number };
 
-/** LINE: infinite line */
-export type Line = string | { a: number; b: number; c: number };
+/** LINE: infinite line (Ax + By + C = 0) */
+export type PgLine = string | { a: number; b: number; c: number };
 
 /** LSEG: line segment */
-export type LineSegment = string | { x1: number; y1: number; x2: number; y2: number };
+export type PgLineSegment =
+  | string
+  | { x1: number; y1: number; x2: number; y2: number };
 
 /** BOX: rectangular box */
-export type Box = string | { x1: number; y1: number; x2: number; y2: number };
+export type PgBox = string | { x1: number; y1: number; x2: number; y2: number };
 
 /** PATH: geometric path (open or closed) */
-export type Path = string | Array<{ x: number; y: number }>;
+export type PgPath = string | Array<{ x: number; y: number }>;
 
 /** POLYGON: closed geometric path */
-export type Polygon = string | Array<{ x: number; y: number }>;
+export type PgPolygon = string | Array<{ x: number; y: number }>;
 
 /** CIRCLE: circle */
-export type Circle = string | { x: number; y: number; r: number };
+export type PgCircle = string | { x: number; y: number; r: number };
 
 // ===========================================================
 // Network Address Types
 // ===========================================================
 
 /** CIDR: IPv4 or IPv6 network */
-export type CIDR = string;
+export type PgCidr = string;
 
 /** INET: IPv4 or IPv6 host and network */
-export type INET = string;
+export type PgInet = string;
 
 /** MACADDR: MAC address */
-export type MacAddr = string;
+export type PgMacaddr = string;
 
 /** MACADDR8: MAC address (EUI-64 format) */
-export type MacAddr8 = string;
+export type PgMacaddr8 = string;
 
 // ===========================================================
 // Bit String Types
 // ===========================================================
 
 /** BIT(n): fixed-length bit string */
-export type Bit<N extends number = number> = string;
+export type PgBit<N extends number = number> = string;
 
-/** BIT VARYING(n): variable-length bit string */
-export type BitVarying<N extends number = number> = string;
+/** BIT VARYING(n) / VARBIT: variable-length bit string */
+export type PgVarbit<N extends number = number> = string;
+export type PgBitVarying<N extends number = number> = PgVarbit<N>;
 
 // ===========================================================
 // Text Search Types
 // ===========================================================
 
 /** TSVECTOR: text search document */
-export type TSVector = string;
+export type PgTsVector = string;
 
 /** TSQUERY: text search query */
-export type TSQuery = string;
+export type PgTsQuery = string;
+
+/** REGCONFIG: text search configuration */
+export type PgRegConfig = string;
+
+/** REGDICTIONARY: text search dictionary */
+export type PgRegDictionary = string;
 
 // ===========================================================
 // UUID Type
 // ===========================================================
 
 /** UUID: universally unique identifier */
-export type UUID = string;
-
-// ===========================================================
-// XML Type
-// ===========================================================
-
-/** XML: XML data */
-export type XML = string;
+export type PgUuid = string;
 
 // ===========================================================
 // JSON Types
 // ===========================================================
 
-/** JSON: text-based JSON data */
-export type JSON = string | object | any[];
+/** JSON: parsed JSON value (pg returns JS value by default) */
+export type PgJson = unknown;
 
-/** JSONB: binary JSON data (recommended) */
-export type JSONB = object | any[] | string | number | boolean | null;
+/** JSONB: parsed JSONB value (pg returns JS value by default) */
+export type PgJsonb = unknown;
 
 // ===========================================================
 // Array Types
 // ===========================================================
 
-/** Array of any PostgreSQL type */
-export type Array<T> = T[];
+/** Array of any PostgreSQL type (parsed) */
+export type PgArray<T> = T[];
+
+/** Pragmatic: arrays can be raw strings if you don't parse them */
+export type PgMaybeParsedArray<T> = T[] | string;
 
 // ===========================================================
 // Composite Types
 // ===========================================================
 
 /** User-defined composite type */
-export type Composite<T extends { [key: string]: unknown } = { [key: string]: unknown }> = T;
+export type PgComposite<T extends { [key: string]: unknown } = { [key: string]: unknown }> = T;
 
 // ===========================================================
 // Range Types
 // ===========================================================
 
-/** INT4RANGE: range of integers */
-export type Int4Range = string | { lower: number; upper: number; bounds?: '[]' | '[)' | '(]' | '()' };
+export type PgRangeBounds = '[]' | '[)' | '(]' | '()';
 
-/** INT8RANGE: range of bigints */
-export type Int8Range = string | { lower: bigint; upper: bigint; bounds?: '[]' | '[)' | '(]' | '()' };
+export type PgInt4Range =
+  | string
+  | { lower: number; upper: number; bounds?: PgRangeBounds };
 
-/** NUMRANGE: range of numerics */
-export type NumRange = string | { lower: number; upper: number; bounds?: '[]' | '[)' | '(]' | '()' };
+export type PgInt8Range =
+  | string
+  | { lower: PgBigInt; upper: PgBigInt; bounds?: PgRangeBounds };
 
-/** TSRANGE: range of timestamps */
-export type TSRange = string | { lower: Date; upper: Date; bounds?: '[]' | '[)' | '(]' | '()' };
+export type PgNumRange =
+  | string
+  | { lower: PgNumeric; upper: PgNumeric; bounds?: PgRangeBounds };
 
-/** TSTZRANGE: range of timestamps with time zone */
-export type TSTZRange = string | { lower: Date; upper: Date; bounds?: '[]' | '[)' | '(]' | '()' };
+export type PgTsRange =
+  | string
+  | { lower: PgTimestamp; upper: PgTimestamp; bounds?: PgRangeBounds };
 
-/** DATERANGE: range of dates */
-export type DateRange = string | { lower: Date; upper: Date; bounds?: '[]' | '[)' | '(]' | '()' };
+export type PgTstzRange =
+  | string
+  | { lower: PgTimestamptz; upper: PgTimestamptz; bounds?: PgRangeBounds };
+
+export type PgDateRange =
+  | string
+  | { lower: PgDate; upper: PgDate; bounds?: PgRangeBounds };
+
+/** Generic range */
+export type PgAnyRange =
+  | string
+  | { lower: unknown; upper: unknown; bounds?: PgRangeBounds };
+
+// ===========================================================
+// Key-Value / Extensions
+// ===========================================================
+
+/** HSTORE (extension) */
+export type PgHstore = string | { [key: string]: string | null };
+
+/** LTREE (extension) */
+export type PgLtree = string;
 
 // ===========================================================
 // Domain Types
 // ===========================================================
 
 /** User-defined domain type */
-export type Domain<T = any> = T;
+export type PgDomain<T = unknown> = T;
 
 // ===========================================================
-// Object Identifier Types
+// Object Identifier & Reg* Types
 // ===========================================================
 
 /** OID: object identifier */
-export type OID = number;
+export type PgOid = number;
 
-/** REGPROC: function name */
-export type RegProc = string;
-
-/** REGPROCEDURE: function with argument types */
-export type RegProcedure = string;
-
-/** REGOPER: operator name */
-export type RegOper = string;
-
-/** REGOPERATOR: operator with argument types */
-export type RegOperator = string;
-
-/** REGCLASS: relation name */
-export type RegClass = string;
-
-/** REGTYPE: data type name */
-export type RegType = string;
-
-/** REGROLE: role name */
-export type RegRole = string;
-
-/** REGNAMESPACE: namespace name */
-export type RegNamespace = string;
-
-/** REGCONFIG: text search configuration */
-export type RegConfig = string;
-
-/** REGDICTIONARY: text search dictionary */
-export type RegDictionary = string;
+export type PgRegProc = string;
+export type PgRegProcedure = string;
+export type PgRegOper = string;
+export type PgRegOperator = string;
+export type PgRegClass = string;
+export type PgRegType = string;
+export type PgRegRole = string;
+export type PgRegNamespace = string;
 
 // ===========================================================
-// pg_lsn Type
+// System / Internal Types
 // ===========================================================
 
 /** pg_lsn: PostgreSQL Log Sequence Number */
-export type PgLSN = string;
+export type PgLsn = string;
+
+/** xid: transaction id */
+export type PgXid = number;
+
+/** xid8: 64-bit transaction id (pg default: string) */
+export type PgXid8 = string | bigint;
+
+/** cid: command identifier */
+export type PgCid = number;
+
+/** txid_snapshot / pg_snapshot */
+export type PgTxidSnapshot = string;
+export type PgSnapshot = string;
 
 // ===========================================================
 // Pseudo-Types (for completeness)
 // ===========================================================
 
-/** ANY: any type */
-export type Any = any;
+export type PgAny = any;
+export type PgAnyElement = any;
+export type PgAnyArray = any[];
+export type PgAnyNonArray = any;
+export type PgAnyEnum = string;
 
-/** ANYELEMENT: any element type */
-export type AnyElement = any;
+export type PgVoid = void;
 
-/** ANYARRAY: any array type */
-export type AnyArray = any[];
-
-/** ANYNONARRAY: any non-array type */
-export type AnyNonArray = any;
-
-/** ANYENUM: any enum type */
-export type AnyEnum = string;
-
-/** ANYRANGE: any range type */
-export type AnyRange = string | object;
-
-/** VOID: no value */
-export type Void = void;
-
-/** TRIGGER: trigger function */
-export type Trigger = never;
-
-/** EVENT_TRIGGER: event trigger function */
-export type EventTrigger = never;
+/** TRIGGER / EVENT_TRIGGER used as function return types in SQL */
+export type PgTrigger = never;
+export type PgEventTrigger = never;
 
 /** RECORD: composite type (variable structure) */
-export type Record = object;
+export type PgRecord = { [key: string]: unknown };
 
-/** UNKNOWN: unknown type */
-export type Unknown = unknown;
+export type PgUnknown = unknown;
 
 // ===========================================================
 // Utility Types
 // ===========================================================
 
 /** Nullable version of any type */
-export type Nullable<T> = T | null;
+export type PgNullable<T> = T | null;
+
+/** PostgreSQL scalar-ish value you may see from pg */
+export type PgScalar =
+  | string
+  | number
+  | bigint
+  | boolean
+  | null
+  | Buffer
+  | Uint8Array
+  | Date;
 
 /** PostgreSQL value (any valid type) */
-export type PgValue = 
-    | string
-    | number
-    | bigint
-    | boolean
-    | Date
-    | Buffer
-    | Uint8Array
-    | object
-    | any[]
-    | null;
+export type PgValue =
+  | PgScalar
+  | PgScalar[]
+  | { [key: string]: unknown };
 
 /** PostgreSQL row (object with any fields) */
 export type PgRow = { [key: string]: PgValue };
+
+/** Default-ish node-postgres output (no custom parsers) */
+export type PgDefaultScalar = string | number | boolean | null | Buffer;
+export type PgDefaultValue =
+  | PgDefaultScalar
+  | PgDefaultScalar[]
+  | { [key: string]: unknown };

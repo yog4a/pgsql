@@ -1,32 +1,37 @@
-import type { Bytea, Hex } from 'src/types.js';
+import type { PgBytea, PgHex } from 'src/types.js';
 
 // ===========================================================
 // Binary conversions
 // ===========================================================
 
-export const byteaToHex = (bytea: Bytea): Hex => {
+export const byteaToHex = (bytea: PgBytea): PgHex => {
     const hex = Buffer.from(bytea).toString('hex');
     return `0x${hex}`;
 };
 
-export const hexToBytea = (hex: Hex): Bytea => {
-    const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+export const hexToBytea = (hex: PgHex | string): PgBytea => {
+    let clean = hex;
+    if (/^0x/i.test(clean)) {
+        clean = clean.slice(2);
+    } else if (/^\\x/i.test(clean)) {
+        clean = clean.slice(2);
+    }
     return Buffer.from(clean, 'hex');
 };
 
-export const stringToBytea = (str: string): Bytea => {
+export const stringToBytea = (str: string): PgBytea => {
     return Buffer.from(str, 'utf8');
 };
 
-export const byteaToString = (bytea: Bytea): string => {
+export const byteaToString = (bytea: PgBytea): string => {
     return Buffer.from(bytea).toString('utf8');
 };
 
-export const base64ToBytea = (base64: string): Bytea => {
+export const base64ToBytea = (base64: string): PgBytea => {
     return Buffer.from(base64, 'base64');
 };
 
-export const byteaToBase64 = (bytea: Bytea): string => {
+export const byteaToBase64 = (bytea: PgBytea): string => {
     return Buffer.from(bytea).toString('base64');
 };
 
