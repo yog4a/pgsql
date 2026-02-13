@@ -8,6 +8,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "prepack": "tsup",
+    "tags": "git push --follow-tags",
     "build": "tsup",
     "build:patch": "npm version patch && npm run build",
     "build:minor": "npm version minor && npm run build",
@@ -16,8 +17,7 @@
     "version:minor": "npm version minor",
     "version:major": "npm version major",
     "update:check": "npx npm-check-updates -u",
-    "update:install": "npm install",
-    "release": "git push --follow-tags"
+    "update:install": "npm install"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
