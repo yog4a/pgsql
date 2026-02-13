@@ -1,7 +1,7 @@
 {
   "name": "@yog4a/pgsql",
   "description": "Personal encapsulation module for pgsql",
-  "version": "1.3.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
@@ -15,7 +15,6 @@
     "version:patch": "npm version patch",
     "version:minor": "npm version minor",
     "version:major": "npm version major",
-    "update": "npx npm-check-updates -u && npm install",
     "update:check": "npx npm-check-updates -u",
     "update:install": "npm install",
     "release": "git push --follow-tags"
