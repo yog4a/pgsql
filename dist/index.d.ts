@@ -430,8 +430,6 @@ declare class NotificationClient extends CoreClient {
     private readonly channels;
     /** The query module */
     protected readonly queryModule: ReturnType<typeof queryModule>;
-    /** The transaction module */
-    protected readonly transactionModule: ReturnType<typeof transactionModule>;
     /** True when client is shutting down */
     private isShuttingDown;
     /**
@@ -441,10 +439,6 @@ declare class NotificationClient extends CoreClient {
      */
     constructor(config: IClient.Config, options: ClientListenOptions);
     query(query: string, values?: unknown[]): Promise<QueryResult>;
-    transaction(queries: {
-        query: string;
-        values?: unknown[];
-    }[]): Promise<QueryResult[]>;
     listen(channel: string, events: Omit<ChannelEvents, 'channel'>): Promise<void>;
     unlisten(channel: string): Promise<void>;
     shutdown(): Promise<void>;

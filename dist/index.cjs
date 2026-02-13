@@ -1295,8 +1295,6 @@ var NotificationClient = class extends CoreClient {
   channels;
   /** The query module */
   queryModule;
-  /** The transaction module */
-  transactionModule;
   /** True when client is shutting down */
   isShuttingDown = false;
   /**
@@ -1309,7 +1307,6 @@ var NotificationClient = class extends CoreClient {
     this.channels = /* @__PURE__ */ new Map();
     const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 2));
     this.queryModule = queryModule({ maxAttempts });
-    this.transactionModule = transactionModule({ maxAttempts });
     this.connectionEvents.onReconnect(() => this.handleReconnect());
     this.connectionEvents.onDisconnect(() => this.handleDisconnect());
     this.connectionEvents.onNotification((msg) => this.handleNotification(msg));
@@ -1321,16 +1318,6 @@ var NotificationClient = class extends CoreClient {
     this.ensureNotShutdown();
     return await this.queryModule.queryWithRetry(
       { query, values },
-      {
-        getClient: this.getClient.bind(this),
-        onError: this.handleModuleError.bind(this)
-      }
-    );
-  }
-  async transaction(queries) {
-    this.ensureNotShutdown();
-    return await this.transactionModule.transactionWithRetry(
-      queries,
       {
         getClient: this.getClient.bind(this),
         onError: this.handleModuleError.bind(this)
@@ -1384,12 +1371,6 @@ var NotificationClient = class extends CoreClient {
     } catch (error) {
       shutdownErrors.push(error);
       this.logger.error("query module shutdown failed:", error.message);
-    }
-    try {
-      await this.transactionModule.shutdown((msg) => this.logger.info(msg));
-    } catch (error) {
-      shutdownErrors.push(error);
-      this.logger.error("transaction module shutdown failed:", error.message);
     }
     try {
       await this.disconnect();
