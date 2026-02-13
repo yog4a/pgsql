@@ -408,6 +408,8 @@ declare class Pool extends CorePool {
  * Additional options for client behavior and debugging.
  */
 interface ClientListenOptions extends IClient.Options {
+    /** Maximum number of attempts to retry a query */
+    maxAttempts?: number;
 }
 /**
  * The events for a channel.
@@ -426,6 +428,10 @@ interface ChannelEvents {
 declare class NotificationClient extends CoreClient {
     /** The channels map */
     private readonly channels;
+    /** The query module */
+    protected readonly queryModule: ReturnType<typeof queryModule>;
+    /** The transaction module */
+    protected readonly transactionModule: ReturnType<typeof transactionModule>;
     /** True when client is shutting down */
     private isShuttingDown;
     /**
@@ -434,16 +440,21 @@ declare class NotificationClient extends CoreClient {
      * @param options - Additional client options.
      */
     constructor(config: IClient.Config, options: ClientListenOptions);
+    query(query: string, values?: unknown[]): Promise<QueryResult>;
+    transaction(queries: {
+        query: string;
+        values?: unknown[];
+    }[]): Promise<QueryResult[]>;
     listen(channel: string, events: Omit<ChannelEvents, 'channel'>): Promise<void>;
     unlisten(channel: string): Promise<void>;
     shutdown(): Promise<void>;
     disconnect(): Promise<void>;
-    getActiveChannels(): string[];
-    getChannelCount(): number;
+    getChannels(): string[];
     private handleReconnect;
     private handleDisconnect;
     private handleNotification;
     private ensureNotShutdown;
+    private handleModuleError;
 }
 
 export { type ChannelEvents, Client, type ClientListenOptions, type ClientOptions, CoreClient, CorePool, IClient, IPool, NotificationClient, Pool, type PoolOptions };

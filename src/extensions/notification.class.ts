@@ -1,5 +1,6 @@
-import type { Notification } from 'pg';
+import type { Notification, QueryResult } from 'pg';
 import { CoreClient, type IClient } from 'src/core/client.core.js';
+import { queryModule } from 'src/modules/query.module.js';
 
 // Types
 // ===========================================================
@@ -8,6 +9,8 @@ import { CoreClient, type IClient } from 'src/core/client.core.js';
  * Additional options for client behavior and debugging.
  */
 export interface ClientListenOptions extends IClient.Options {
+    /** Maximum number of attempts to retry a query */
+    maxAttempts?: number;
 };
 
 /**
@@ -31,6 +34,8 @@ export interface ChannelEvents {
 export class NotificationClient extends CoreClient {
     /** The channels map */
     private readonly channels: Map<string, Omit<ChannelEvents, 'channel'>>;
+    /** The query module */
+    protected readonly queryModule: ReturnType<typeof queryModule>;
     /** True when client is shutting down */
     private isShuttingDown: boolean = false;
 
@@ -45,6 +50,12 @@ export class NotificationClient extends CoreClient {
         // Initialize channels
         this.channels = new Map();
 
+        // Initialize options
+        const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 2));
+
+        // Initialize modules
+        this.queryModule = queryModule({ maxAttempts });
+
         // Hook into client events for auto-reconnect
         this.connectionEvents.onReconnect(() => this.handleReconnect());
         this.connectionEvents.onDisconnect(() => this.handleDisconnect());
@@ -54,6 +65,18 @@ export class NotificationClient extends CoreClient {
     // ===========================================================
     // Public methods
     // ===========================================================
+
+    public async query(query: string, values?: unknown[]): Promise<QueryResult> {
+        this.ensureNotShutdown();
+
+        return await this.queryModule.queryWithRetry(
+            { query, values },
+            {
+                getClient: this.getClient.bind(this),
+                onError: this.handleModuleError.bind(this),
+            }
+        );
+    }
 
     public async listen(channel: string, events: Omit<ChannelEvents, 'channel'>): Promise<void> {
         this.ensureNotShutdown();
@@ -112,11 +135,27 @@ export class NotificationClient extends CoreClient {
 
         this.isShuttingDown = true;
 
+        // Shutdown modules with error handling
+        const shutdownErrors: Error[] = [];
+
+        try {
+            await this.queryModule.shutdown((msg) => this.logger.info(msg));
+        } catch (error) {
+            shutdownErrors.push(error as Error);
+            this.logger.error('query module shutdown failed:', (error as Error).message);
+        }
+
         try {
             await this.disconnect();
         } catch (error) {
+            shutdownErrors.push(error as Error);
             this.logger.error('client disconnect failed:', (error as Error).message);
-            throw error;
+        }
+
+        if (shutdownErrors.length > 0) {
+            throw new Error(
+                `Shutdown completed with ${shutdownErrors.length} error(s)`
+            );
         }
 
         this.logger.info('client shutdown complete');
@@ -127,12 +166,8 @@ export class NotificationClient extends CoreClient {
         this.channels.clear();
     }
 
-    public getActiveChannels(): string[] {
+    public getChannels(): string[] {
         return Array.from(this.channels.keys());
-    }
-
-    public getChannelCount(): number {
-        return this.channels.size;
     }
 
     // ===========================================================
@@ -210,5 +245,9 @@ export class NotificationClient extends CoreClient {
         if (this.isShuttingDown) {
             throw new Error('Client is shutting down');
         }
+    }
+
+    private handleModuleError(err: string): void {
+        this.logger.error(err);
     }
 }

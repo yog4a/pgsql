@@ -1263,6 +1263,10 @@ var NotificationClient = class extends CoreClient {
   }
   /** The channels map */
   channels;
+  /** The query module */
+  queryModule;
+  /** The transaction module */
+  transactionModule;
   /** True when client is shutting down */
   isShuttingDown = false;
   /**
@@ -1273,6 +1277,9 @@ var NotificationClient = class extends CoreClient {
   constructor(config, options) {
     super(config, options);
     this.channels = /* @__PURE__ */ new Map();
+    const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 2));
+    this.queryModule = queryModule({ maxAttempts });
+    this.transactionModule = transactionModule({ maxAttempts });
     this.connectionEvents.onReconnect(() => this.handleReconnect());
     this.connectionEvents.onDisconnect(() => this.handleDisconnect());
     this.connectionEvents.onNotification((msg) => this.handleNotification(msg));
@@ -1280,6 +1287,26 @@ var NotificationClient = class extends CoreClient {
   // ===========================================================
   // Public methods
   // ===========================================================
+  async query(query, values) {
+    this.ensureNotShutdown();
+    return await this.queryModule.queryWithRetry(
+      { query, values },
+      {
+        getClient: this.getClient.bind(this),
+        onError: this.handleModuleError.bind(this)
+      }
+    );
+  }
+  async transaction(queries) {
+    this.ensureNotShutdown();
+    return await this.transactionModule.transactionWithRetry(
+      queries,
+      {
+        getClient: this.getClient.bind(this),
+        onError: this.handleModuleError.bind(this)
+      }
+    );
+  }
   async listen(channel, events) {
     this.ensureNotShutdown();
     if (this.channels.has(channel)) {
@@ -1321,11 +1348,29 @@ var NotificationClient = class extends CoreClient {
       return;
     }
     this.isShuttingDown = true;
+    const shutdownErrors = [];
+    try {
+      await this.queryModule.shutdown((msg) => this.logger.info(msg));
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("query module shutdown failed:", error.message);
+    }
+    try {
+      await this.transactionModule.shutdown((msg) => this.logger.info(msg));
+    } catch (error) {
+      shutdownErrors.push(error);
+      this.logger.error("transaction module shutdown failed:", error.message);
+    }
     try {
       await this.disconnect();
     } catch (error) {
+      shutdownErrors.push(error);
       this.logger.error("client disconnect failed:", error.message);
-      throw error;
+    }
+    if (shutdownErrors.length > 0) {
+      throw new Error(
+        `Shutdown completed with ${shutdownErrors.length} error(s)`
+      );
     }
     this.logger.info("client shutdown complete");
   }
@@ -1333,11 +1378,8 @@ var NotificationClient = class extends CoreClient {
     await super.disconnect();
     this.channels.clear();
   }
-  getActiveChannels() {
+  getChannels() {
     return Array.from(this.channels.keys());
-  }
-  getChannelCount() {
-    return this.channels.size;
   }
   // ===========================================================
   // Private methods - Event handlers
@@ -1399,6 +1441,9 @@ var NotificationClient = class extends CoreClient {
     if (this.isShuttingDown) {
       throw new Error("Client is shutting down");
     }
+  }
+  handleModuleError(err) {
+    this.logger.error(err);
   }
 };
 export {
