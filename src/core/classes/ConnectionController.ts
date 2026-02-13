@@ -1,4 +1,4 @@
-import { Gate, Logger } from 'src/classes/index.js';
+import { Logger, Gate } from 'src/classes/index.js';
 import { Client, Pool, type DatabaseError } from 'pg';
 
 // Class
@@ -6,7 +6,7 @@ import { Client, Pool, type DatabaseError } from 'pg';
 
 export class ConnectionController {
     /** The connection test timeout (in milliseconds) */
-    private readonly testTimeoutMs: number = 10_000;
+    private readonly TIMEOUT_MS: number = 10_000;
     /** Class Connection Gate */
     public readonly connection: Gate;
 
@@ -83,7 +83,7 @@ export class ConnectionController {
         const timeout = new Promise<never>((_, reject) => {
             timer = setTimeout(
                 () => reject(new Error("Connection test timed out")), 
-                this.testTimeoutMs
+                this.TIMEOUT_MS
             );
         });
     

@@ -163,46 +163,47 @@ var Logger = class _Logger {
   static {
     __name(this, "Logger");
   }
+  // ===========================================================
   // Public methods
+  // ===========================================================
   /** Logs informational messages */
   info(...args) {
-    try {
-      console.info(this.prefix, ...args);
-    } catch (error) {
-      console.info(this.prefix, "cannot log");
-    }
+    this.process("info", ...args);
   }
   /** Logs warning messages */
   warn(...args) {
-    try {
-      console.warn(this.prefix, ...args);
-    } catch (error) {
-      console.warn(this.prefix, "cannot log");
-    }
+    this.process("warn", ...args);
   }
   /** Logs error messages */
   error(...args) {
-    try {
-      console.error(this.prefix, ...args);
-    } catch (error) {
-      console.error(this.prefix, "cannot log");
-    }
+    this.process("error", ...args);
   }
   /** Logs debug messages */
   debug(...args) {
-    try {
-      console.debug(this.prefix, "\u{1F538}", ...args);
-    } catch (error) {
-      console.debug(this.prefix, "\u{1F538}", "cannot log");
-    }
+    this.process("debug", ...args);
   }
   /** Re-throws an error with prefix */
   throw(message) {
     throw new Error(`${this.prefix} ${message}`);
   }
-  /** Creates a new logger with a suffix */
+  /** Creates a new logger and cumulate the prefix (example: 'parent:child1:child2') */
   child(prefix) {
     return new _Logger(`${this.prefix}${prefix}`);
+  }
+  // ===========================================================
+  // Private methods
+  // ===========================================================
+  /** Logs a message to the console */
+  process(mode, ...args) {
+    const prefix = mode === "debug" ? `${this.prefix} \u{1F538}` : this.prefix;
+    try {
+      console[mode](prefix, ...args);
+    } catch {
+      try {
+        console[mode](prefix, "cannot log");
+      } catch {
+      }
+    }
   }
 };
 
@@ -222,7 +223,7 @@ var ConnectionController = class {
     __name(this, "ConnectionController");
   }
   /** The connection test timeout (in milliseconds) */
-  testTimeoutMs = 1e4;
+  TIMEOUT_MS = 1e4;
   /** Class Connection Gate */
   connection;
   // Public
@@ -277,7 +278,7 @@ var ConnectionController = class {
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(
         () => reject(new Error("Connection test timed out")),
-        this.testTimeoutMs
+        this.TIMEOUT_MS
       );
     });
     try {
@@ -375,37 +376,54 @@ var CoreClient = class {
     this.logger = new Logger(`[pgsql][client][${database}]`);
     this.connectionController = new ConnectionController(this.logger, options.debug);
     this.connectionEvents = new ConnectionEvents();
-    this.setup();
+    void this.setup().catch((error) => {
+      setImmediate(() => {
+        throw error;
+      });
+    });
   }
   static {
     __name(this, "CoreClient");
   }
-  /** Class Logger Instance */
-  logger;
   /** Class Connection Controller */
   connectionController;
   /** Class Connection Events */
   connectionEvents;
+  /** Class Logger Instance */
+  logger;
   /** Setup running */
   isCreating = false;
+  /** True after the first successful connection */
+  hasConnectedOnce = false;
+  /** True when client is intentionally shutting down */
+  isShuttingDown = false;
+  /** Startup connection error (used to fail fast on first connect) */
+  startupError = null;
   /** The PostgreSQL client instance */
   client = null;
   // Public
   async getClient() {
-    await this.connectionController.connection.enter();
+    if (this.startupError) {
+      throw this.startupError;
+    }
+    await this.connectionController.connection.enterOrWait();
+    if (this.startupError) {
+      throw this.startupError;
+    }
     if (!this.client) {
-      throw new Error("Client is not initialized");
+      throw new Error("Client is not initialized or not connected");
     }
     return this.client;
   }
   async disconnect() {
-    await this.connectionController.connection.enter();
+    this.isShuttingDown = true;
+    this.connectionController.connection.close(new Error("Client disconnected"));
     await this.destroyClient();
     this.connectionController.connection.close();
   }
   // Private
   async setup() {
-    if (this.isCreating) {
+    if (this.isCreating || this.isShuttingDown) {
       if (this.options.debug) {
         this.logger.info("Client is already being setup");
       }
@@ -413,23 +431,8 @@ var CoreClient = class {
     }
     this.isCreating = true;
     this.connectionController.connection.close();
-    if (this.client) {
-      try {
-        await this.verifyClient();
-        this.isCreating = false;
-        this.connectionController.connection.open();
-        return;
-      } catch (error) {
-        if (this.options.debug) {
-          this.logger.info("Existing client verification failed, recreating...");
-        }
-      }
-      this.connectionEvents.disconnect();
-    }
     try {
-      let attempt = 0;
-      while (true) {
-        attempt++;
+      if (!this.hasConnectedOnce) {
         try {
           await this.destroyClient();
           await this.createClient();
@@ -437,12 +440,38 @@ var CoreClient = class {
           if (this.options.debug) {
             this.logger.info(`successfully setup client`);
           }
+          this.startupError = null;
+          this.hasConnectedOnce = true;
           this.connectionController.connection.open();
           this.connectionEvents.connect();
-          break;
+          return;
+        } catch (error) {
+          const startupError = error;
+          this.startupError = startupError;
+          this.connectionController.connection.close(startupError);
+          this.logger.error(
+            `failed initial client setup:`,
+            error.message
+          );
+          throw startupError;
+        }
+      }
+      let attempt = 0;
+      while (!this.isShuttingDown) {
+        attempt++;
+        try {
+          await this.destroyClient();
+          await this.createClient();
+          await this.verifyClient();
+          if (this.options.debug) {
+            this.logger.info(`successfully reconnected client`);
+          }
+          this.connectionController.connection.open();
+          this.connectionEvents.reconnect();
+          return;
         } catch (error) {
           this.logger.error(
-            `attempt ${attempt} failed to create client:`,
+            `attempt ${attempt} failed to reconnect client:`,
             error.message
           );
         }
@@ -458,12 +487,15 @@ var CoreClient = class {
     this.client = new import_pg.Client(this.config);
     this.client.on("error", (err) => {
       this.logger.error(`Client error: ${err.message} (${err?.code})`);
-      if (this.isCreating === false) {
-        this.setup();
+      if (this.isCreating === false && this.isShuttingDown === false) {
+        void this.setup();
       }
     });
     this.client.on("end", () => {
       this.logger.warn("Client connection closed");
+      if (this.isCreating === false && this.isShuttingDown === false) {
+        void this.setup();
+      }
     });
     await this.client.connect();
   }
@@ -494,6 +526,7 @@ var CoreClient = class {
       );
     }
     this.client = null;
+    this.connectionEvents.disconnect();
   }
   async verifyClient() {
     if (!this.client) {
@@ -998,7 +1031,7 @@ var ListenClient = class extends CoreClient {
     this.channels = /* @__PURE__ */ new Map();
     this.queryModule = queryModule({ maxAttempts: options.maxAttempts ?? 2 });
     this.transactionModule = transactionModule({ maxAttempts: options.maxAttempts ?? 2 });
-    this.connectionEvents.onConnect(() => this.onClientConnect());
+    this.connectionEvents.onReconnect(() => this.onClientReconnect());
     this.connectionEvents.onDisconnect(() => this.onClientDisconnect());
   }
   // Public
@@ -1077,7 +1110,7 @@ var ListenClient = class extends CoreClient {
     await super.disconnect();
   }
   // Private - Client event handlers
-  async onClientConnect() {
+  async onClientReconnect() {
     if (this.channels.size === 0) return;
     try {
       const client = await this.getClient();

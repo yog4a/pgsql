@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { type Notification } from 'pg';
 
 // Class
 // ===========================================================
@@ -16,28 +17,35 @@ export class ConnectionEvents {
     /**
      * Emits the connect event.
      */
-    connect(): void {
-        this.events.emit('connect');
+    connect(message?: string): void {
+        this.events.emit('connect', message);
     }
 
     /**
      * Emits the disconnect event.
      */
-    disconnect(): void {
-        this.events.emit('disconnect');
+    disconnect(message?: string | Error): void {
+        this.events.emit('disconnect', message);
     }
 
     /**
      * Emits the reconnect event.
      */
-    reconnect(): void {
-        this.events.emit('reconnect');
+    reconnect(message?: string | Error): void {
+        this.events.emit('reconnect', message);
+    }
+
+    /**
+     * Emits the notification event.
+     */
+    notification(notif: Notification): void {
+        this.events.emit('notification', notif);
     }
     
     /**
      * Adds a listener for the connect event.
      */
-    onConnect(fn: () => void): void {
+    onConnect(fn: (message?: string) => void): void {
         if (this.events.listenerCount('connect') > 0) {
             this.events.removeAllListeners('connect');
         }
@@ -47,7 +55,7 @@ export class ConnectionEvents {
     /**
      * Adds a listener for the disconnect event.
      */
-    onDisconnect(fn: () => void): void {
+    onDisconnect(fn: (message?: string | Error) => void): void {
         if (this.events.listenerCount('disconnect') > 0) {
             this.events.removeAllListeners('disconnect');
         }
@@ -57,10 +65,20 @@ export class ConnectionEvents {
     /**
      * Adds a listener for the reconnect event.
      */
-    onReconnect(fn: () => void): void {
+    onReconnect(fn: (message?: string | Error) => void): void {
         if (this.events.listenerCount('reconnect') > 0) {
             this.events.removeAllListeners('reconnect');
         }
         this.events.on('reconnect', fn);
+    }
+
+    /**
+     * Adds a listener for the notification event.
+     */
+    onNotification(fn: (notif: Notification) => void): void {
+        if (this.events.listenerCount('notification') > 0) {
+            this.events.removeAllListeners('notification');
+        }
+        this.events.on('notification', fn);
     }
 }

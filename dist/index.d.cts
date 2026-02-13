@@ -86,15 +86,17 @@ declare class Logger {
     debug(...args: any[]): void;
     /** Re-throws an error with prefix */
     throw(message: string): void;
-    /** Creates a new logger with a suffix */
+    /** Creates a new logger and cumulate the prefix (example: 'parent:child1:child2') */
     child(prefix: string): Logger;
+    /** Logs a message to the console */
+    private process;
 }
 
 declare class ConnectionController {
     private readonly logger;
     private readonly debug;
     /** The connection test timeout (in milliseconds) */
-    private readonly testTimeoutMs;
+    private readonly TIMEOUT_MS;
     /** Class Connection Gate */
     readonly connection: Gate;
     /**
@@ -180,14 +182,20 @@ declare namespace IClient {
 declare class CoreClient {
     protected readonly config: IClient.Config;
     protected readonly options: IClient.Options;
-    /** Class Logger Instance */
-    protected readonly logger: Logger;
     /** Class Connection Controller */
     protected readonly connectionController: ConnectionController;
     /** Class Connection Events */
     protected readonly connectionEvents: ConnectionEvents;
+    /** Class Logger Instance */
+    protected readonly logger: Logger;
     /** Setup running */
     private isCreating;
+    /** True after the first successful connection */
+    private hasConnectedOnce;
+    /** True when client is intentionally shutting down */
+    private isShuttingDown;
+    /** Startup connection error (used to fail fast on first connect) */
+    private startupError;
     /** The PostgreSQL client instance */
     private client;
     /**
@@ -423,7 +431,7 @@ declare class ListenClient extends CoreClient {
      * Disconnect and clean up all listeners.
      */
     disconnect(): Promise<void>;
-    private onClientConnect;
+    private onClientReconnect;
     private onClientDisconnect;
     private onNotification;
 }

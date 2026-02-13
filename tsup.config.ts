@@ -4,7 +4,6 @@ export default defineConfig({
     entry: [
         'src/index.ts',
         'src/utils.ts',
-        'src/packages/pg.ts',
     ],
     format: ['cjs', 'esm'],        // both outputs
     target: 'es2022',              // better for Node 18+

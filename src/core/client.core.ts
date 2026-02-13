@@ -1,7 +1,8 @@
-import { Client, ClientConfig, type DatabaseError } from 'pg';
+import { Client, type ClientConfig, type DatabaseError } from 'pg';
 import { ConnectionController } from './classes/ConnectionController.js';
 import { ConnectionEvents } from './classes/ConnectionEvents.js';
 import { Logger } from 'src/classes/index.js';
+import { waitWithBackoff } from 'src/utils/wait.utils.js';
 
 // Types
 // ===========================================================
@@ -35,16 +36,20 @@ export namespace IClient {
 // ===========================================================
 
 export class CoreClient {
-    /** Class Logger Instance */
-    protected readonly logger: Logger;
     /** Class Connection Controller */
     protected readonly connectionController: ConnectionController;
     /** Class Connection Events */
     protected readonly connectionEvents: ConnectionEvents;
-    /** Setup running */
-    private isCreating: boolean = false;
+    /** Class Logger Instance */
+    protected readonly logger: Logger;
+    /** True when reconnection is in progress */
+    private _isReconnecting: boolean = false;
+    /** True when client is being destroyed */
+    private _isDestroying: boolean = false;
+    /** True when client is intentionally shutting down */
+    private _isShuttingDown: boolean = false;
     /** The PostgreSQL client instance */
-    private client: Client | null = null;
+    private _client: Client | null = null;
 
     /**
      * Client class constructor.
@@ -72,150 +77,200 @@ export class CoreClient {
         this.connectionEvents = new ConnectionEvents();
 
         // Initialize client
-        this.setup();
+        this.initialize().catch((error) => {
+            setImmediate(() => { throw error; });
+        });
     }
 
-    // Public
+    // ===========================================================
+    // Public methods
+    // ===========================================================
 
     public async getClient(): Promise<Client> {
-        await this.connectionController.connection.enter();
-
-        if (!this.client) {
-            throw new Error('Client is not initialized');
+        await this.connectionController.connection.enterOrWait();
+    
+        if (!this._client) {
+            // Retry si reconnect en cours
+            if (this._isReconnecting) {
+                await this.connectionController.connection.enterOrWait();
+            }
+            
+            if (!this._client) {
+                throw new Error('Client is not initialized or not connected');
+            }
         }
-
-        return this.client;
+    
+        return this._client;
     }
 
     public async disconnect(): Promise<void> {
-        // Enter the connection
-        await this.connectionController.connection.enter();
+        this._isShuttingDown = true;
+
+        // Reject pending waiters immediately
+        this.connectionController.connection.close(
+            new Error('Client disconnected')
+        );
 
         // Destroy the client
         await this.destroyClient();
-
-        // Reset the connection
-        this.connectionController.connection.close();
     }
 
-    // Private
+    // ===========================================================
+    // Private methods - Initialization
+    // ===========================================================
 
-    private async setup(): Promise<void> {
-        if (this.isCreating) {
+    private async initialize(): Promise<void> {
+        try {
+            await this.createClient();
+            await this.verifyClient();
+
             if (this.options.debug) {
-                this.logger.info('Client is already being setup');
+                this.logger.info('client initialized');
             }
+
+            this.connectionController.connection.open();
+            this.connectionEvents.connect();
+        } 
+        catch (error) {
+            this.logger.error('failed to initialize client:', (error as Error).message);
+            throw error;
+        }
+    }
+
+    // ===========================================================
+    // Private methods - Reconnection
+    // ===========================================================
+
+    private async reconnect(): Promise<void> {
+        if (this._isReconnecting || this._isShuttingDown) {
             return;
         }
 
-        this.isCreating = true;
+        this._isReconnecting = true;
         this.connectionController.connection.close();
 
-        if (this.client) {
+        let attempt = 0;
+
+        while (!this._isShuttingDown) {
+            attempt++;
             try {
+                await this.destroyClient();
+                await this.createClient();
                 await this.verifyClient();
-                this.isCreating = false;
+
+                if (this.options.debug) {
+                    this.logger.info('client reconnected');
+                }
+
                 this.connectionController.connection.open();
+                this.connectionEvents.reconnect();
+                this._isReconnecting = false;
                 return;
             } 
             catch (error) {
-                if (this.options.debug) {
-                    this.logger.info('Existing client verification failed, recreating...');
-                }
+                this.logger.error(
+                    `reconnect attempt ${attempt} failed:`,
+                    (error as Error).message
+                );
             }
-            this.connectionEvents.disconnect();
+
+            await waitWithBackoff(attempt, { maxJitterMs: 500, maxDelayMs: 10_000 });
         }
 
-        try {
-            let attempt = 0;
-
-            while (true) {
-                attempt++;
-                try {
-                    await this.destroyClient();
-                    await this.createClient();
-                    await this.verifyClient();
-
-                    if (this.options.debug) {
-                        this.logger.info(`successfully setup client`);
-                    }
-                    this.connectionController.connection.open();
-                    this.connectionEvents.connect();
-                    break;
-                }
-                catch (error) {
-                    // Log the error
-                    this.logger.error(`attempt ${attempt} failed to create client:`,
-                        (error as DatabaseError).message,
-                    );
-                }
-                // Add a random jitter and backoff to prevent thundering herd
-                const jitter = Math.random() * 500;              // 0–0.5s
-                const backoff = Math.min(attempt, 10) * 1000;     // 1s ... 10s
-                await new Promise(r => setTimeout(r, backoff + jitter));
-            }
-        }
-        finally {
-            this.isCreating = false;
-        }
+        this._isReconnecting = false;
     }
 
+    // ===========================================================
+    // Private methods - Client management
+    // ===========================================================
+
     private async createClient(): Promise<void> {
-        this.client = new Client(this.config);
+        if (this._client) {
+            throw new Error('Client is already initialized');
+        }
+
+        // Create the client instance
+        this._client = new Client(this.config);
 
         // Set up event listeners for client error events
-        this.client.on('error', (err: Error) => {
-            this.logger.error(`Client error: ${err.message} (${(err as DatabaseError)?.code})`);
-            if (this.isCreating === false) {
-                this.setup();
+        this._client.on('error', (err: Error) => {
+            const dbErr = err as DatabaseError;
+            this.logger.error(
+                `Client error: ${err.message} (${dbErr?.code || 'N/A'})`
+            );
+            if (!this._isReconnecting && !this._isShuttingDown) {
+                void this.verifyOrReconnect();
             }
         });
 
-        // Set up event listeners for client connection end events
-        this.client.on('end', () => {
-            this.logger.warn('Client connection closed');
+        // Set up event listeners for client end events
+        this._client.on('end', () => {
+            this.logger.warn(
+                'Client connection closed'
+            );
+            if (!this._isReconnecting && !this._isShuttingDown) {
+                void this.reconnect();
+            }
+        });
+
+        // Forward notifications to upper class
+        this._client.on('notification', (msg) => {
+            this.connectionEvents.notification(msg);
         });
 
         // Connect to the database
-        await this.client.connect();
+        await this._client.connect();
     }
 
     private async destroyClient(): Promise<void> {
-        if (!this.client) { return; }
-
-        try {
-            // Remove all listeners
-            this.client.removeAllListeners();
-            if (this.options.debug) {
-                this.logger.info(`successfully removed all listeners`);
-            }
-        } catch (error) {
-            this.logger.warn(`failed to remove all listeners:`, 
-                (error as Error).message
-            );
-        }
-        try {
-            // Close the client (drains the client)
-            await this.client.end();
-            if (this.options.debug) {
-                this.logger.info(`successfully closed client`);
-            }
-        } catch (error) {
-            this.logger.warn(`failed to close client:`, 
-                (error as Error).message
-            );
+        if (!this._client || this._isDestroying) {
+            return;
         }
 
-        // Reset the client
-        this.client = null;
+        this._isDestroying = true;
+
+        try {
+            this._client.removeAllListeners();
+            await this._client.end();
+
+            if (this.options.debug) {
+                this.logger.info('client destroyed');
+            }
+        } 
+        catch (error) {
+            this.logger.warn('destroy failed:', (error as Error).message);
+        } 
+        finally {
+            this._client = null;
+            this._isDestroying = false;
+        }
     }
 
     private async verifyClient(): Promise<void> {
-        if (!this.client) {
+        if (!this._client) {
             throw new Error('Client is not initialized');
         }
 
         // Test the connection with a client instance (throws if failed)
-        await this.connectionController.testClient(this.client);
+        await this.connectionController.testClient(this._client);
+    }
+
+    private verifyOrReconnect(): void {
+        if (!this._client) {
+            void this.reconnect();
+            return;
+        }
+    
+        // Test the connection with a client instance (throws if failed)
+        void this.connectionController.testClient(this._client)
+            .then(() => {
+                if (this.options.debug) {
+                    this.logger.info('client still alive');
+                }
+            })
+            .catch((error) => {
+                this.logger.warn('client dead, reconnecting:', (error as Error).message);
+                void this.reconnect();
+            });
     }
 }

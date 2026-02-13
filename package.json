@@ -46,18 +46,6 @@
       "import": "./dist/utils.mjs",
       "require": "./dist/utils.cjs",
       "default": "./dist/utils.mjs"
-    },
-    "./pg": {
-      "types": "./dist/packages/pg.d.ts",
-      "import": "./dist/packages/pg.mjs",
-      "require": "./dist/packages/pg.cjs",
-      "default": "./dist/packages/pg.mjs"
-    },
-    "./clients": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs",
-      "default": "./dist/index.mjs"
     }
   }
 }

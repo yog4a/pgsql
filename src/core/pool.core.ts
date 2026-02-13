@@ -1,7 +1,8 @@
-import { Pool, PoolConfig, type PoolClient, type DatabaseError } from 'pg';
+import { Pool, type PoolConfig, type PoolClient, type DatabaseError } from 'pg';
 import { ConnectionController } from './classes/ConnectionController.js';
 import { ConnectionEvents } from './classes/ConnectionEvents.js';
 import { Logger } from 'src/classes/index.js';
+import { waitWithBackoff } from 'src/utils/wait.utils.js';
 
 // Types
 // ===========================================================
@@ -9,7 +10,6 @@ import { Logger } from 'src/classes/index.js';
 export namespace IPool {
     /**
      * Configuration options required for creating a PostgreSQL connection pool.
-     * All fields are required and non-nullable.
      */
     export interface Config extends PoolConfig {
         /** Database host address */
@@ -40,16 +40,20 @@ export namespace IPool {
 // ===========================================================
 
 export class CorePool {
-    /** Class Logger Instance */
-    protected readonly logger: Logger;
     /** Class Connection Controller */
     protected readonly connectionController: ConnectionController;
     /** Class Connection Events */
     protected readonly connectionEvents: ConnectionEvents;
-    /** Setup running */
-    private setupRunning: boolean = false;
+    /** Class Logger Instance */
+    protected readonly logger: Logger;
+    /** True when reconnection is in progress */
+    private _isReconnecting: boolean = false;
+    /** True when pool is being destroyed */
+    private _isDestroying: boolean = false;
+    /** True when pool is intentionally shutting down */
+    private _isShuttingDown: boolean = false;
     /** The PostgreSQL pool instance */
-    private pool: Pool | null = null;
+    private _pool: Pool | null = null;
 
     /**
      * Pool class constructor.
@@ -67,12 +71,12 @@ export class CorePool {
             throw new Error(`Need minimum required database configuration: ${required}`);
         }
         
-        if (max === undefined || max === null || Number.isNaN(max) || !Number.isInteger(max) || max < 2) {
+        if (!Number.isInteger(max) || max < 2) {
             throw new Error(`Max clients (${max}) in pool must be at least 2!`);
         }
 
-        if (min === undefined || min === null || Number.isNaN(min) || !Number.isInteger(min) || min < 0) {
-            throw new Error(`Min clients (${min}) in pool must be at least 0!`);
+        if (!Number.isInteger(min) || min < 1) {
+            throw new Error(`Min clients (${min}) in pool must be at least 1!`);
         }
 
         if (min > max) {
@@ -87,14 +91,14 @@ export class CorePool {
 
         // Set idle timeout (how long idle clients stay alive in pool)
         if (config.idleTimeoutMillis === undefined || config.idleTimeoutMillis === null) {
-            // Default is 10s; set to 60s for this pool
+            // Default is 10s; set to 60s to avoid too many client rotations
             config.idleTimeoutMillis = 60_000; // 60 seconds
         }
 
         // Forces connection rotation, helps avoid stale connections if infra/network resets (default: 0 = disabled)
         if (config.maxLifetimeSeconds === undefined || config.maxLifetimeSeconds === null) {
             // Default is 0 (disabled) 
-            config.maxLifetimeSeconds = 600; // default: 10 minutes
+            config.maxLifetimeSeconds = 600; // 10 minutes
         }
 
         // Initialize logger
@@ -107,186 +111,225 @@ export class CorePool {
         this.connectionEvents = new ConnectionEvents();
 
         // Initialize pool
-        this.setup();
+        this.initialize().catch((error) => {
+            setImmediate(() => { throw error; });
+        });
     }
 
-    // Public
-    
+    // ===========================================================
+    // Public methods
+    // ===========================================================
+
     public metrics() {
-        if (!this.pool) {
+        if (!this._pool) {
             return null;
         }
         return {
             /** Total number of clients existing within the pool */
-            total: this.pool.totalCount,
+            total: this._pool.totalCount,
             /** Number of clients which are not checked out but are currently idle in the pool */
-            idle: this.pool.idleCount,
+            idle: this._pool.idleCount,
             /** Number of clients which are checked out and in use */
-            active: this.pool.totalCount - this.pool.idleCount,
+            active: this._pool.totalCount - this._pool.idleCount,
             /** Number of queued requests waiting on a client when all clients are checked out */
-            waiting: this.pool.waitingCount,
+            waiting: this._pool.waitingCount,
         }
     }
 
     public async getClient(): Promise<PoolClient> {
-        await this.connectionController.connection.enter();
+        await this.connectionController.connection.enterOrWait();
 
-        if (!this.pool) {
+        if (!this._pool) {
             throw new Error('Pool is not initialized');
         }
 
         // Get a client from the pool
-        const client = await this.pool.connect();
+        const client = await this._pool.connect();
         return client;
     }
 
     public async disconnect(): Promise<void> {
-        // Enter the connection
-        await this.connectionController.connection.enter();
+        this._isShuttingDown = true;
+
+        // Reject pending waiters
+        this.connectionController.connection.close(
+            new Error('Pool disconnected')
+        );
 
         // Destroy the pool
         await this.destroyPool();
-
-        // Reset the connection
-        this.connectionController.connection.close();
     }
 
-    // Private
+    // ===========================================================
+    // Private methods - Initialization
+    // ===========================================================
 
-    private async setup(): Promise<void> {
-        if (this.setupRunning) {
+    private async initialize(): Promise<void> {
+        try {
+            await this.createPool();
+            await this.verifyPool();
+
             if (this.options.debug) {
-                this.logger.info('Pool is already being setup');
+                this.logger.info('pool initialized');
             }
+
+            this.connectionController.connection.open();
+            this.connectionEvents.connect();
+        } 
+        catch (error) {
+            this.logger.error('failed to initialize pool:', (error as Error).message);
+            throw error;
+        }
+    }
+
+    // ===========================================================
+    // Private methods - Reconnection
+    // ===========================================================
+
+    private async reconnect(): Promise<void> {
+        if (this._isReconnecting || this._isShuttingDown) {
             return;
         }
 
-        this.setupRunning = true;
+        this._isReconnecting = true;
         this.connectionController.connection.close();
 
-        try {
-            let attempt = 0;
+        let attempt = 0;
 
-            while (true) {
-                attempt++;
-                try {
-                    await this.createPool();
-                    await this.verifyPool();
+        while (!this._isShuttingDown) {
+            attempt++;
+            try {
+                await this.destroyPool();
+                await this.createPool();
+                await this.verifyPool();
 
-                    if (this.options.debug) {
-                        this.logger.info(`successfully setup pool`);
-                    }
-
-                    this.connectionController.connection.open();
-                    this.connectionEvents.connect();
-                    
-                    break;
+                if (this.options.debug) {
+                    this.logger.info('pool reconnected');
                 }
-                catch (error) {
-                    // Log the error
-                    this.logger.error(`attempt ${attempt} failed to create pool:`,
-                        (error as DatabaseError).message,
-                    );
-                }
-                // Add a random jitter and backoff to prevent thundering herd
-                const jitter = Math.random() * 500;              // 0–0.5s
-                const backoff = Math.min(attempt, 10) * 1000;     // 1s ... 10s
-                await new Promise(r => setTimeout(r, backoff + jitter));
+
+                this.connectionController.connection.open();
+                this.connectionEvents.reconnect();
+                this._isReconnecting = false;
+                return;
+            } 
+            catch (error) {
+                this.logger.error(
+                    `reconnect attempt ${attempt} failed:`,
+                    (error as Error).message
+                );
             }
+
+            await waitWithBackoff(attempt, { maxJitterMs: 500, maxDelayMs: 10_000 });
         }
-        finally {
-            this.setupRunning = false;
-        }
+
+        this._isReconnecting = false;
     }
 
+    // ===========================================================
+    // Private methods - Pool management
+    // ===========================================================
+
     private async createPool(): Promise<void> {
-        if (this.pool) { return; }
+        if (this._pool) {
+            throw new Error('Pool is already initialized');
+        }
 
         // Create the pool instance
-        this.pool = new Pool(this.config);
+        this._pool = new Pool(this.config);
 
         // Set up event listeners for pool error events
-        if (this.pool.listenerCount('error') === 0) {
-            this.pool.on('error', (err: Error, client: PoolClient) => {
-                this.logger.error(`Pool error: ${err.message} (${(err as DatabaseError)?.code})`, err, client);
-            });
-        }
+        this._pool.on('error', (err: Error, client: PoolClient) => {
+            const dbErr = err as DatabaseError;
+            this.logger.error(
+                `Pool error: ${err.message} (${dbErr?.code || 'N/A'})`, err, client
+            );
+            if (!this._isReconnecting && !this._isShuttingDown) {
+                void this.verifyOrReconnect();
+            }
+        });
 
         // Set up event listeners for pool connection lifecycle events
-        if (this.pool.listenerCount('connect') === 0) {
-            this.pool.on('connect', (client: PoolClient) => {
-                if (client.listenerCount('error') === 0) {
-                    client.on('error', (err: Error) => {
-                        this.logger.error(`Client error: ${err.message} (${(err as DatabaseError)?.code})`, err, client);
-                    });
-                }
-                if (this.options.debug) {
-                    this.logger.info('New client connection established');
-                }
-            });
-        }
+        this._pool.on('connect', (client: PoolClient) => {
+            if (client.listenerCount('error') === 0) {
+                client.on('error', (err: Error) => {
+                    const dbErr = err as DatabaseError;
+                    this.logger.error(
+                        `Client error: ${err.message} (${dbErr?.code || 'N/A'})`, err, client
+                    );
+                });
+            }
+            if (this.options.debug) {
+                this.logger.info('New client connection established');
+            }
+        });
 
         // Set up event listeners for pool client removal events
-        if (this.pool.listenerCount('remove') === 0) {
-            this.pool.on('remove', (client: PoolClient) => {
-                client.removeAllListeners();
-                if (this.options.debug) {
-                    this.logger.info('Client closed and removed from pool');
-                }
-            });
-        }
+        this._pool.on('remove', (client: PoolClient) => {
+            client.removeAllListeners();
+            if (this.options.debug) {
+                this.logger.info('Client closed and removed from pool');
+            }
+        });
 
         // Set up event listeners for connection lifecycle events (debug)
         if (this.options.debug) {
-            if (this.pool.listenerCount('acquire') === 0) {
-                this.pool.on('acquire', (client: PoolClient) => {
-                    this.logger.info('Client acquired from pool');
-                });
-            }
-            if (this.pool.listenerCount('release') === 0) {
-                this.pool.on('release', (err: Error, client: PoolClient) => {
-                    this.logger.info('Client released back to pool');
-                });
-            }
+            this._pool.on('acquire', (client: PoolClient) => {
+                this.logger.info('Client acquired from pool');
+            });
+            this._pool.on('release', (err: Error, client: PoolClient) => {
+                this.logger.info('Client released back to pool');
+            });
         }
     }
 
     private async destroyPool(): Promise<void> {
-        if (!this.pool) { return; }
-
-        try {
-            // Remove all listeners
-            this.pool.removeAllListeners();
-            if (this.options.debug) {
-                this.logger.info(`successfully removed all listeners`);
-            }
-        } catch (error) {
-            this.logger.warn(`failed to remove all listeners:`, 
-                (error as Error).message
-            );
-        }
-        try {
-            // Close the pool (drains the pool)
-            await this.pool.end();
-            if (this.options.debug) {
-                this.logger.info(`successfully closed pool`);
-            }
-        } catch (error) {
-            this.logger.warn(`failed to close pool:`, 
-                (error as Error).message
-            );
+        if (!this._pool || this._isDestroying) {
+            return;
         }
 
-        // Reset the pool
-        this.pool = null;
+        this._isDestroying = true;
+
+        try {
+            this._pool.removeAllListeners();
+            await this._pool.end();
+
+            if (this.options.debug) {
+                this.logger.info('pool destroyed');
+            }
+        } 
+        catch (error) {
+            this.logger.warn('destroy failed:', (error as Error).message);
+        } 
+        finally {
+            this._pool = null;
+            this._isDestroying = false;
+        }
     }
 
     private async verifyPool(): Promise<void> {
-        if (!this.pool) {
+        if (!this._pool) {
             throw new Error('Pool is not initialized');
         }
 
         // Test the connection with a pool instance (throws if failed)
-        await this.connectionController.testPool(this.pool);
+        await this.connectionController.testPool(this._pool);
+    }
+
+    private verifyOrReconnect(): void {
+        if (!this._pool) {
+            void this.reconnect();
+            return;
+        }
+
+        void this.connectionController.testPool(this._pool)
+            .then(() => {
+                if (this.options.debug) {
+                    this.logger.info('pool still alive');
+                }
+            })
+            .catch((error) => {
+                this.logger.warn('pool dead, reconnecting:', (error as Error).message);
+                void this.reconnect();
+            });
     }
 }

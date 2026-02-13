@@ -1,3 +1,11 @@
+// Types
+// ===========================================================
+
+export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
+
+// Class
+// ===========================================================
+
 /**
  * Simple and extensible logger utility.
  *
@@ -13,42 +21,28 @@ export class Logger {
         private readonly prefix: string,
     ) {}
 
+    // ===========================================================
     // Public methods
+    // ===========================================================
 
     /** Logs informational messages */
     public info(...args: any[]): void {
-        try {
-            console.info(this.prefix, ...args);
-        } catch (error) {
-            console.info(this.prefix, 'cannot log');
-        }
+        this.process('info', ...args);
     }
 
     /** Logs warning messages */
     public warn(...args: any[]): void {
-        try {
-            console.warn(this.prefix, ...args);
-        } catch (error) {
-            console.warn(this.prefix, 'cannot log');
-        }
+        this.process('warn', ...args);
     }
 
     /** Logs error messages */
     public error(...args: any[]): void {
-        try {
-            console.error(this.prefix, ...args);
-        } catch (error) {
-            console.error(this.prefix, 'cannot log');
-        }
+        this.process('error', ...args);
     }
 
     /** Logs debug messages */
     public debug(...args: any[]): void {
-        try {
-            console.debug(this.prefix, '🔸', ...args);
-        } catch (error) {
-            console.debug(this.prefix, '🔸', 'cannot log');
-        }
+        this.process('debug', ...args);
     }
 
     /** Re-throws an error with prefix */
@@ -56,8 +50,25 @@ export class Logger {
         throw new Error(`${this.prefix} ${message}`);
     }
 
-    /** Creates a new logger with a suffix */
+    /** Creates a new logger and cumulate the prefix (example: 'parent:child1:child2') */
     public child(prefix: string): Logger {
         return new Logger(`${this.prefix}${prefix}`);
+    }
+
+    // ===========================================================
+    // Private methods
+    // ===========================================================
+
+    /** Logs a message to the console */
+    private process(mode: LogLevel, ...args: any[]): void {
+        const prefix = mode === 'debug' ? `${this.prefix} 🔸` : this.prefix;
+        
+        try {
+            console[mode](prefix, ...args);
+        } catch {
+            try {
+                console[mode](prefix, 'cannot log');
+            } catch {} // Ignore si console aussi échoue
+        }
     }
 }
