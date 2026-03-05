@@ -233,9 +233,9 @@ var ConnectionController = class {
    */
   async testClient(instance) {
     try {
-      await this.testConnection(instance);
+      const duration = await this.testConnection(instance);
       if (this.debug) {
-        this.logger.info(`Client tested successfully`);
+        this.logger.info(`Client tested successfully, Database latency: ${duration}ms`);
       }
       return;
     } catch (error) {
@@ -253,9 +253,9 @@ var ConnectionController = class {
    */
   async testPool(instance) {
     try {
-      await this.testConnection(instance);
+      const duration = await this.testConnection(instance);
       if (this.debug) {
-        this.logger.info(`Pool tested successfully`);
+        this.logger.info(`Pool tested successfully, Database latency: ${duration}ms`);
       }
       return;
     } catch (error) {
@@ -282,11 +282,14 @@ var ConnectionController = class {
       );
     });
     try {
+      const startAt = performance.now();
       const query = instance.query("SELECT 1");
       const result = await Promise.race([query, timeout]);
       if (!result?.rows?.length) {
         throw new Error("Connection test query failed");
       }
+      const endAt = performance.now();
+      return endAt - startAt;
     } finally {
       clearTimeout(timer);
     }
