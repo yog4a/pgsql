@@ -79,7 +79,7 @@ export type PgXml = string;
 export type PgBytea = Buffer | Uint8Array;
 
 /** HEX: hexadecimal string representation */
-export type PgHex = `0x${string}` | `\\x${string}`;
+export type PgHex = `0x${string}`;
 
 // ===========================================================
 // Date/Time Types

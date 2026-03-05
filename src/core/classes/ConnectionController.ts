@@ -31,9 +31,9 @@ export class ConnectionController {
     public async testClient(instance: Client): Promise<void> {
         try {
             // Test the connection with a client/pool instance
-            await this.testConnection(instance); 
+            const duration = await this.testConnection(instance); 
             if (this.debug) {
-                this.logger.info(`Client tested successfully`);
+                this.logger.info(`Client tested successfully, Database latency: ${duration}ms`);
             }
             return;
         }
@@ -54,9 +54,9 @@ export class ConnectionController {
     public async testPool(instance: Pool): Promise<void> {
         try {
             // Test the connection with a client/pool instance
-            await this.testConnection(instance); 
+            const duration = await this.testConnection(instance); 
             if (this.debug) {
-                this.logger.info(`Pool tested successfully`);
+                this.logger.info(`Pool tested successfully, Database latency: ${duration}ms`);
             }
             return;
         }
@@ -77,7 +77,7 @@ export class ConnectionController {
      * @param instance - The client/pool instance.
      * @param signal - The abort signal.
      */
-    private async testConnection(instance: Client | Pool): Promise<void> {
+    private async testConnection(instance: Client | Pool): Promise<number> {
         let timer: NodeJS.Timeout;
         
         const timeout = new Promise<never>((_, reject) => {
@@ -88,11 +88,14 @@ export class ConnectionController {
         });
     
         try {
+            const startAt = performance.now();
             const query = instance.query("SELECT 1");
             const result = await Promise.race([query, timeout]);
             if (!result?.rows?.length) {
                 throw new Error("Connection test query failed");
             }
+            const endAt = performance.now();
+            return endAt - startAt;
         } finally {
             clearTimeout(timer!);
         }

@@ -1,7 +1,7 @@
 /** BYTEA: binary data */
 type PgBytea = Buffer | Uint8Array;
 /** HEX: hexadecimal string representation */
-type PgHex = `0x${string}` | `\\x${string}`;
+type PgHex = `0x${string}`;
 
 declare const byteaToHex: (bytea: PgBytea) => PgHex;
 declare const hexToBytea: (hex: PgHex | string) => PgBytea;
